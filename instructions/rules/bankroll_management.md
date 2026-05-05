@@ -1,0 +1,1 @@
+1. Use literally the lowest possible for algo trading, it's indicators that u can use and buy over for yourself

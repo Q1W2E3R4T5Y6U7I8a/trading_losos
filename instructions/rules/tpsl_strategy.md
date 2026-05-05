@@ -1,0 +1,1 @@
+1. Make fixed ending by time, not fibonachi or anth, like in hour, end of trading session etc
