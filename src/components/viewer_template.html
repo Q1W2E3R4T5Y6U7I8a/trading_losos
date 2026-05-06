@@ -213,7 +213,7 @@ const fmtDur = (a, b) => { const h = Math.round((b - a) / 3600); return h + 'h';
 let currentData = null;
 let visibleSyms = new Set();
 let symbolMeshes = new Map();      // symbol -> { objects: [], label: CSS2DObject }
-let globalConnectors = [];
+
 let raycastable = [];
 
 // THREE SCENE
@@ -379,7 +379,6 @@ function buildConnectors(symPtsMap, nowTs) {
 
 function updateVisibility() {
   const anyVisible = visibleSyms.size >= 2;
-  globalConnectors.forEach(conn => { if (conn) conn.visible = anyVisible; });
   symbolMeshes.forEach(({ objects, label }, sym) => {
     const v = visibleSyms.has(sym);
     objects.forEach(obj => { if (obj) obj.visible = v; });
