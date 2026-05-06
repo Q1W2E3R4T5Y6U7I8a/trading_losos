@@ -187,6 +187,91 @@ body { overflow: hidden; background: var(--bg); color: var(--g); font-family: 'J
 <div id="tip"></div>
 <div id="liveIndicator">⬤ connecting…</div>
 
+<!-- Add this after the botbar div or before the closing </body> -->
+<div style="position: fixed; bottom: 50px; left: 50%; transform: translateX(-50%); z-index: 200; pointer-events: auto; background: rgba(1,1,5,0.95); backdrop-filter: blur(12px); border: 1px solid #00ff4144; border-radius: 40px; padding: 6px 12px; display: flex; gap: 8px;">
+    <button id="btnMA" style="background: #00ff4114; border: 1px solid #00ff4166; color: #00ff41; font-family: monospace; font-size: 11px; padding: 6px 16px; border-radius: 30px; cursor: pointer; transition: all 0.2s;">📈 MA CROSSOVER</button>
+    <button id="btnRSI" style="background: #00ff4114; border: 1px solid #00ff4166; color: #00ff41; font-family: monospace; font-size: 11px; padding: 6px 16px; border-radius: 30px; cursor: pointer; transition: all 0.2s;">📉 RSI REVERSION</button>
+    <div id="strategyIndicator" style="background: #00ff4122; border-radius: 30px; padding: 6px 12px; font-size: 11px; color: #00ff41; margin-left: 8px;">🟢 MA ACTIVE</div>
+</div>
+
+<style>
+    #btnMA:hover, #btnRSI:hover {
+        background: #00ff4166;
+        transform: scale(1.02);
+    }
+    .active-strategy {
+        background: #00ff4166 !important;
+        box-shadow: 0 0 12px #00ff4144;
+    }
+</style>
+
+<script>
+// Strategy switcher logic
+const btnMA = document.getElementById('btnMA');
+const btnRSI = document.getElementById('btnRSI');
+const strategyIndicator = document.getElementById('strategyIndicator');
+
+function setActiveButton(strategy) {
+    if (strategy === 'ma') {
+        btnMA.classList.add('active-strategy');
+        btnRSI.classList.remove('active-strategy');
+        strategyIndicator.innerHTML = '📈 MA ACTIVE';
+        strategyIndicator.style.color = '#00ff41';
+    } else {
+        btnRSI.classList.add('active-strategy');
+        btnMA.classList.remove('active-strategy');
+        strategyIndicator.innerHTML = '📉 RSI ACTIVE';
+        strategyIndicator.style.color = '#ffdd00';
+    }
+}
+
+async function switchStrategy(strategy) {
+    try {
+        const response = await fetch('/switch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ strategy: strategy })
+        });
+        
+        if (response.ok) {
+            setActiveButton(strategy);
+            // Visual feedback
+            strategyIndicator.style.opacity = '0.5';
+            setTimeout(() => { strategyIndicator.style.opacity = '1'; }, 200);
+            
+            // Force refresh data
+            const dataRes = await fetch('/data');
+            const newData = await dataRes.json();
+            if (newData.symbols) {
+                render3D(newData);
+                updateTradeHistory(newData);
+            }
+        }
+    } catch (e) {
+        console.error('Switch failed:', e);
+        strategyIndicator.innerHTML = '⚠️ SWITCH FAILED';
+        setTimeout(() => {
+            const current = strategyIndicator.innerHTML.includes('MA') ? '📈 MA ACTIVE' : '📉 RSI ACTIVE';
+            strategyIndicator.innerHTML = current;
+        }, 1000);
+    }
+}
+
+btnMA.addEventListener('click', () => switchStrategy('ma'));
+btnRSI.addEventListener('click', () => switchStrategy('rsi'));
+
+// Get current strategy on load
+async function getCurrentStrategy() {
+    try {
+        const res = await fetch('/strategy');
+        const info = await res.json();
+        setActiveButton(info.current);
+    } catch(e) {}
+}
+
+getCurrentStrategy();
+</script>
+
 <script type="importmap">
 {
   "imports": {
@@ -368,7 +453,7 @@ function buildConnectors(symPtsMap, nowTs) {
     if (vertPts.length < 2) return;
     vertPts.sort((a, b) => a.z - b.z);
     const geo = new THREE.BufferGeometry().setFromPoints(vertPts);
-    const mat = new THREE.LineBasicMaterial({ color: 0x00ff41, transparent: true, opacity: 0.075 });
+    const mat = new THREE.LineBasicMaterial({ color: 0x00ff41, transparent: true, opacity: 0.475 });
     const line = new THREE.Line(geo, mat);
     line.userData = { isConnector: true };
     scene.add(line);
@@ -382,7 +467,13 @@ function updateVisibility() {
   symbolMeshes.forEach(({ objects, label }, sym) => {
     const v = visibleSyms.has(sym);
     objects.forEach(obj => { if (obj) obj.visible = v; });
-    if (label) label.visible = v;
+    if (label) {
+      label.visible = v;
+      // Make deselected labels much more transparent
+      if (label.element) {
+        label.element.style.opacity = v ? '0' : '0';  // 0.08 = 8% opacity when deselected
+      }
+    }
   });
 }
 
@@ -528,8 +619,9 @@ function render3D(data) {
     div.textContent = `${sym} ${short}`;
     Object.assign(div.style, {
       color: pnlColor(pnlVal), fontSize: '9px', fontWeight: '700', fontFamily: 'JetBrains Mono, monospace',
-      background: 'rgba(1,1,5,.88)', padding: '3px 9px', borderRadius: '12px',
-      border: `1px solid ${pnlColor(pnlVal)}`, cursor: 'pointer', whiteSpace: 'nowrap'
+      background: 'rgba(1,1,5,0.5)', padding: '3px 9px', borderRadius: '12px',
+      border: `1px solid ${pnlColor(pnlVal)}`, cursor: 'pointer', whiteSpace: 'nowrap',
+      opacity: '0.4'
     });
     div.addEventListener('mouseenter', e => showTip(sym, data, e));
     div.addEventListener('mousemove', updateTipPos);
