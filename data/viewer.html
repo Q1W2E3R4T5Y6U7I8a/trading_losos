@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MA CROSSOVER // 3D LIVE</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --g:  #00ff41;
+  --r:  #ff3344;
+  --y:  #ffdd00;
+  --bg: #010105;
+  --dim: #333;
+  --panel-bg: rgba(2,4,8,0.96);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { overflow: hidden; background: var(--bg); color: var(--g); font-family: 'JetBrains Mono', monospace; }
+
+/* ── TOP BAR ─────────────────────────────── */
+#topbar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 14px 20px 10px;
+  background: rgba(1,1,5,0.85);
+  border-bottom: 1px solid #00ff4118;
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+}
+#title   { font-size: 9px; letter-spacing: 4px; color: #444; margin-bottom: 4px; }
+#totalpnl { font-size: 30px; font-weight: 700; letter-spacing: -1px; }
+#totalpnl.pos { color: var(--g); text-shadow: 0 0 8px #00ff4144; }
+#totalpnl.neg { color: var(--r); text-shadow: 0 0 8px #ff334444; }
+#totalpnl.neu { color: var(--y); }
+#stats { text-align: right; font-size: 9px; color: #555; line-height: 1.8; }
+#stats b { color: #aaa; }
+
+/* ── PROGRESS BAR ────────────────────────── */
+#prog { position: fixed; top: 0; left: 0; height: 2px; background: var(--g); z-index: 200; transition: width .3s; }
+
+/* ── BOTTOM BAR ──────────────────────────── */
+#botbar {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
+  display: flex; justify-content: space-between;
+  padding: 8px 20px; font-size: 9px; color: #444;
+  background: rgba(1,1,5,0.8); border-top: 1px solid #00ff4110;
+  backdrop-filter: blur(8px); pointer-events: none;
+}
+#botbar span { color: #666; }
+
+/* ── LIVE DOT ────────────────────────────── */
+.dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--g); animation: pulse 1.5s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.25} }
+
+/* ── SIDE PANELS (shared base) ───────────── */
+.panel {
+  position: fixed; top: 50%; z-index: 200;
+  background: var(--panel-bg); backdrop-filter: blur(14px);
+  border: 1px solid #00ff4144; border-radius: 10px;
+  padding: 14px; font-size: 10px;
+  transition: transform .3s cubic-bezier(.2,.9,.4,1.1), opacity .25s;
+  pointer-events: auto;
+}
+.panel h3 { color: var(--g); font-size: 11px; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #00ff4122; }
+
+.panel-toggle {
+  position: fixed; top: 50%;
+  background: #00ff4114; border: 1px solid #00ff4166; border-radius: 30px;
+  width: 28px; height: 56px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; z-index: 201; backdrop-filter: blur(6px);
+  font-size: 14px; color: var(--g);
+  transition: background .2s;
+  pointer-events: auto;
+}
+.panel-toggle:hover { background: #00ff4144; }
+
+/* ── RIGHT: FILTER PANEL ─────────────────── */
+#filterPanel {
+  right: 20px; transform: translateY(-50%);
+  min-width: 170px;
+}
+#filterPanel.hidden { transform: translateY(-50%) translateX(120%); opacity: 0; pointer-events: none; }
+#filterToggle  { right: 20px; transform: translateY(-50%); }
+
+.f-section { margin-bottom: 12px; border-bottom: 1px solid #00ff4115; padding-bottom: 8px; }
+.f-label   { color: #666; font-size: 8px; font-weight: 700; margin-bottom: 6px; letter-spacing: 2px; }
+.f-item    { margin: 5px 0; display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 9px; }
+.f-item:hover { color: var(--g); }
+.f-item input  { cursor: pointer; accent-color: var(--g); }
+.f-item label  { cursor: pointer; user-select: none; }
+#symList   { max-height: 220px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #00ff4133 transparent; }
+.f-btns    { display: flex; gap: 6px; margin-top: 10px; }
+.f-btn { background: #00ff4114; border: 1px solid #00ff4155; color: var(--g); padding: 4px 10px; font-size: 9px; cursor: pointer; border-radius: 4px; font-family: inherit; }
+.f-btn:hover { background: #00ff4133; }
+
+/* ── LEFT: TRADE HISTORY PANEL ───────────── */
+#histPanel {
+  left: 20px; transform: translateY(-50%);
+  min-width: 240px; max-width: 260px;
+}
+#histPanel.hidden { transform: translateY(-50%) translateX(-120%); opacity: 0; pointer-events: none; }
+#histToggle { left: 20px; transform: translateY(-50%); }
+
+#tradeList { max-height: 340px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #00ff4133 transparent; }
+.trade-item {
+  padding: 7px 8px; margin-bottom: 4px;
+  border-radius: 5px; border: 1px solid transparent;
+  font-size: 9px; line-height: 1.6;
+  transition: border-color .15s;
+}
+.trade-item:hover { border-color: #00ff4144; }
+.trade-item.pos { background: #00ff4108; }
+.trade-item.neg { background: #ff334408; }
+.trade-item.open { background: #ffdd0008; border-color: #ffdd0044; }
+.trade-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px; }
+.trade-sym  { font-weight: 700; font-size: 10px; }
+.trade-pnl  { font-weight: 700; }
+.trade-pnl.pos { color: var(--g); }
+.trade-pnl.neg { color: var(--r); }
+.trade-pnl.live { color: var(--y); }
+.trade-meta { color: #555; font-size: 8px; }
+.trade-dir-buy  { color: #4af; font-size: 8px; }
+.trade-dir-sell { color: #f84; font-size: 8px; }
+.trade-open-badge { background: #ffdd0022; color: var(--y); border: 1px solid #ffdd0044; border-radius: 3px; padding: 1px 5px; font-size: 7px; letter-spacing: 1px; }
+
+#histSummary { border-bottom: 1px solid #00ff4122; padding-bottom: 10px; margin-bottom: 10px; font-size: 9px; }
+#histSummary .row { display: flex; justify-content: space-between; margin: 3px 0; }
+#histSummary .lbl { color: #555; }
+#histSummary .val { color: #aaa; }
+#histSummary .val.pos { color: var(--g); }
+#histSummary .val.neg { color: var(--r); }
+
+/* ── TOOLTIP ─────────────────────────────── */
+#tip {
+  position: fixed; background: rgba(1,1,5,0.97); border: 1px solid var(--g);
+  border-radius: 7px; padding: 12px 16px; font-size: 10px; color: #ddd;
+  pointer-events: none; z-index: 1000; backdrop-filter: blur(10px);
+  opacity: 0; transition: opacity .12s; max-width: 260px;
+}
+#tip.on { opacity: 1; }
+.tip-sym  { font-size: 14px; font-weight: 700; margin-bottom: 6px; }
+.tip-pnl  { font-size: 20px; font-weight: 700; margin: 4px 0 8px; }
+.tip-row  { display: flex; justify-content: space-between; gap: 20px; margin: 4px 0; font-size: 9px; }
+.tip-lbl  { color: #666; }
+.tip-val  { font-weight: 700; }
+.tip-val.pos { color: var(--g); }
+.tip-val.neg { color: var(--r); }
+.tip-val.neu { color: var(--y); }
+.tip-div  { height: 1px; background: #00ff4120; margin: 7px 0; }
+.g { color: var(--g); } .r { color: var(--r); } .y { color: var(--y); }
+
+/* ── SSE status dot ─────────────────────── */
+#liveIndicator {
+  position: fixed; bottom: 8px; left: 50%; transform: translateX(-50%);
+  font-size: 8px; color: #444; z-index: 101; pointer-events: none;
+}
+#liveIndicator.connected { color: #00ff4166; }
+</style>
+</head>
+<body>
+
+<div id="prog"></div>
+<div id="topbar">
+  <div>
+    <div id="totalpnl" class="neu">$0.00</div>
+  </div>
+  <div id="stats">
+    <div>TIME <b id="simTime">--:--:--</b></div>
+    <div>OPEN <b id="openCount">0</b> / <b id="symCount">27</b></div>
+    <div>SIM&nbsp; <b id="pctDone">0.0</b>%</div>
+  </div>
+</div>
+
+<!-- LEFT: trade history -->
+<div class="panel-toggle" id="histToggle" title="Trade log">◀</div>
+<div class="panel" id="histPanel">
+  <h3><span class="dot"></span> TRADE LOG</h3>
+  <div id="histSummary">
+    <div class="row"><span class="lbl">Closed trades</span><span class="val" id="sTrades">0</span></div>
+    <div class="row"><span class="lbl">Win rate</span><span class="val" id="sWinRate">—</span></div>
+    <div class="row"><span class="lbl">Avg P&L</span><span class="val" id="sAvg">—</span></div>
+    <div class="row"><span class="lbl">Best</span><span class="val pos" id="sBest">—</span></div>
+    <div class="row"><span class="lbl">Worst</span><span class="val neg" id="sWorst">—</span></div>
+  </div>
+  <div id="tradeList"></div>
+</div>
+
+<!-- RIGHT: symbol filter -->
+<div class="panel-toggle" id="filterToggle" title="Filters">▶</div>
+<div class="panel" id="filterPanel">
+  <h3>◉ FILTERS</h3>
+  <div class="f-section">
+    <div class="f-label">CURRENCY</div>
+    <div id="currencyFilters"></div>
+  </div>
+  <div class="f-section" style="border:0;margin:0">
+    <div class="f-label">SYMBOLS</div>
+    <div id="symList"></div>
+  </div>
+  <div class="f-btns">
+    <button class="f-btn" id="btnAll">ALL ON</button>
+    <button class="f-btn" id="btnNone">ALL OFF</button>
+  </div>
+</div>
+
+<div id="botbar"></div>
+<div id="tip"></div>
+<div id="liveIndicator">⬤ connecting…</div>
+
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.128.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.128.0/examples/jsm/"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls }        from 'three/addons/controls/OrbitControls.js';
+import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+
+// ═══════════════════════════════════════════════════════════════
+//  HELPERS
+// ═══════════════════════════════════════════════════════════════
+const pnlColor  = v => v > 0.8 ? '#00ff41' : v < -0.8 ? '#ff3344' : '#ffdd00';
+const pnlClass  = v => v > 0.8 ? 'pos' : v < -0.8 ? 'neg' : 'neu';
+const fmt       = (v, prefix=true) => (prefix && v>=0 ? '+' : '') + '$' + Math.abs(v).toFixed(2);
+const fmtTime   = ts => new Date(ts*1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+const fmtDur    = (a,b) => { const h=Math.round((b-a)/3600); return h+'h'; };
+
+// ─── SHARED Y SCALE ────────────────────────────────────────────
+// All lines (per-symbol AND aggregate) use the same scale factor
+const Y_SCALE = 20 / 48;   // same as original per-symbol: (cum / 48) * 20
+const yScale  = cum => Math.max(-5, Math.min(20, cum * Y_SCALE));
+
+// ═══════════════════════════════════════════════════════════════
+//  THREE.JS SCENE
+// ═══════════════════════════════════════════════════════════════
+const scene  = new THREE.Scene();
+scene.background = new THREE.Color('black');
+scene.fog        = new THREE.FogExp2(0x010105, 0.005);
+
+const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 1000);
+camera.position.set(22, 18, 36);
+camera.lookAt(8, 0, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+const css2d = new CSS2DRenderer();
+css2d.setSize(innerWidth, innerHeight);
+css2d.domElement.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:2';
+document.body.appendChild(css2d.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true; controls.dampingFactor = 0.06;
+
+// Lighting
+scene.add(new THREE.AmbientLight(0x111122, 1));
+const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+sun.position.set(12, 22, 10); sun.castShadow = true; scene.add(sun);
+const fill = new THREE.PointLight(0x3366ff, 0.4);
+fill.position.set(-8, 12, 15); scene.add(fill);
+
+// Grid
+const grid = new THREE.GridHelper(60, 30, 0x00ff41, 0x00ff41);
+grid.material.transparent = true;
+grid.material.opacity = 0.1;
+grid.position.y = 0; scene.add(grid);
+
+// Axis arrows
+const mkArrow = (dir, color, len) => {
+  const a = new THREE.ArrowHelper(new THREE.Vector3(...dir).normalize(), new THREE.Vector3(0,0,0), len, color, 0.8, 0.5);
+  scene.add(a);
+};
+mkArrow([1,0,0], 0xff6666, 24);
+mkArrow([0,1,0], 0x66ff66, 14);
+
+// Origin marker
+const originSphere = new THREE.Mesh(
+  new THREE.SphereGeometry(0.12, 16, 16),
+  new THREE.MeshStandardMaterial({color:0xffffff, emissive:0x00ff41, emissiveIntensity:.7})
+);
+scene.add(originSphere);
+
+function mkLabel(text, x, y, z, color='#aaa', size='9px') {
+  const d = document.createElement('div');
+  d.textContent = text;
+  Object.assign(d.style, {color, fontSize:size, background:'rgba(1,1,5,.7)', padding:'2px 6px', borderRadius:'3px'});
+  const obj = new CSS2DObject(d);
+  obj.position.set(x, y, z);
+  scene.add(obj);
+  return obj;
+}
+
+// X-axis time ticks
+[-24,-20,-16,-12,-8,-4,0,4,8].forEach(h => {
+  if (h < -26 || h > 16) return;
+  const text = h === 0 ? '◀ NOW' : h > 0 ? `+${h}h` : `${Math.abs(h)}h ago`;
+  mkLabel(text, h, -1.7, 15, h===0 ? '#00ff41' : '#555', '8px');
+});
+mkLabel('← HOURS →', 5, -2.0, 16.5, '#00ff4166', '8px');
+
+// ═══════════════════════════════════════════════════════════════
+//  SCENE STATE
+// ═══════════════════════════════════════════════════════════════
+let currentData   = null;
+let visibleSyms   = new Set();
+// FIX #2: symbolMeshes now stores ALL objects belonging to a symbol (tube, spheres, label, connectors)
+let symbolMeshes  = new Map();  // symbol → { objects: THREE.Object3D[], label: CSS2DObject }
+let raycastable   = [];
+
+const raycaster = new THREE.Raycaster();
+const mouse     = new THREE.Vector2();
+const tip       = document.getElementById('tip');
+
+function showTip(symbol, data, e) {
+  if (!data) return;
+  const pnl   = data.profits[symbol] || 0;
+  const pos   = (data.open_positions || {})[symbol];
+  const trades = (data.trades || []).filter(t => t.symbol === symbol);
+  const wins   = trades.filter(t => t.pnl > 0).length;
+  const wr     = trades.length ? (wins/trades.length*100).toFixed(0)+'%' : '—';
+  const avg    = trades.length ? (trades.reduce((a,t)=>a+t.pnl,0)/trades.length) : 0;
+  const pc     = pnlClass(pnl);
+
+  tip.innerHTML = `
+    <div class="tip-sym ${pc}">${symbol.slice(0,3)}/${symbol.slice(3)}</div>
+    <div class="tip-pnl ${pc}">${fmt(pnl)}</div>
+    <div class="tip-div"></div>
+    <div class="tip-row"><span class="tip-lbl">Status</span><span class="tip-val">${pos ? '<span class="y">● OPEN</span>' : trades.length ? 'CLOSED' : 'WAITING'}</span></div>
+    ${pos ? `<div class="tip-row"><span class="tip-lbl">Direction</span><span class="tip-val">${pos.type}</span></div>
+    <div class="tip-row"><span class="tip-lbl">Unrealized</span><span class="tip-val ${pnlClass(pos.unrealized_pnl)}">${fmt(pos.unrealized_pnl)}</span></div>` : ''}
+    <div class="tip-row"><span class="tip-lbl">Closed trades</span><span class="tip-val">${trades.length}</span></div>
+    <div class="tip-row"><span class="tip-lbl">Win rate</span><span class="tip-val">${wr}</span></div>
+    <div class="tip-row"><span class="tip-lbl">Avg P&L</span><span class="tip-val ${pnlClass(avg)}">${trades.length ? fmt(avg) : '—'}</span></div>
+  `;
+  tip.classList.add('on');
+  updateTipPos(e);
+}
+function hideTip()  { tip.classList.remove('on'); }
+function updateTipPos(e) { tip.style.left=(e.clientX+14)+'px'; tip.style.top=(e.clientY+14)+'px'; }
+
+window.addEventListener('mousemove', e => {
+  mouse.x =  (e.clientX / renderer.domElement.clientWidth)  * 2 - 1;
+  mouse.y = -(e.clientY / renderer.domElement.clientHeight) * 2 + 1;
+  raycaster.setFromCamera(mouse, camera);
+  const hits = raycaster.intersectObjects(raycastable);
+  if (hits.length && hits[0].object.userData?.symbol && currentData) {
+    showTip(hits[0].object.userData.symbol, currentData, e);
+  } else hideTip();
+  updateTipPos(e);
+});
+
+// ── Build extruded tube from 3D points ──────────────────────────
+function mkTube(pts, color, radius=0.09, opacity=1) {
+  if (pts.length < 2) return null;
+  const curve = new THREE.CatmullRomCurve3(pts);
+  const segs  = Math.max(64, pts.length * 6);
+  const geo   = new THREE.TubeGeometry(curve, segs, radius, 6, false);
+  const mat   = new THREE.MeshStandardMaterial({
+    color, emissive:color, emissiveIntensity:.22,
+    roughness:.4, metalness:.7,
+    transparent: opacity < 1, opacity
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.castShadow = true;
+  return mesh;
+}
+
+// ── Clear dynamic scene objects ──────────────────────────────────
+function clearScene() {
+  raycastable = [];
+  const keep = new Set([originSphere, grid]);
+  const rm = [];
+  scene.children.forEach(c => {
+    if (keep.has(c) || c.isLight || c.isArrowHelper || c.isCSS2DObject ||
+        c instanceof THREE.GridHelper) return;
+    rm.push(c);
+  });
+  rm.forEach(c => {
+    if (c.geometry) c.geometry.dispose();
+    if (c.material) c.material.dispose();
+    scene.remove(c);
+  });
+  symbolMeshes.clear();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  FIX #3: Build vertical "web" connectors between adjacent symbols at each timestep
+// ═══════════════════════════════════════════════════════════════
+function buildConnectors(symPtsMap, now_ts) {
+  // Collect all unique timestamps across all symbols
+  const allTs = new Set();
+  symPtsMap.forEach(pts => pts.forEach(p => allTs.add(p.userData_ts)));
+  const sortedTs = [...allTs].sort((a,b)=>a-b);
+
+  // Sample evenly — too many connectors = chaos, use every Nth timestamp
+  const step = Math.max(1, Math.floor(sortedTs.length / 20));
+
+  const connectorObjects = [];
+  const symKeys = [...symPtsMap.keys()];
+
+  sortedTs.forEach((ts, ti) => {
+    if (ti % step !== 0) return;
+    const xPos = (ts - now_ts) / 3600;
+    const vertPts = [];
+
+    symKeys.forEach(sym => {
+      const pts = symPtsMap.get(sym);
+      // Find closest point in time
+      const match = pts.reduce((best, p) => Math.abs(p.userData_ts - ts) < Math.abs(best.userData_ts - ts) ? p : best, pts[0]);
+      if (match) vertPts.push(new THREE.Vector3(match.x, match.y, match.z));
+    });
+
+    if (vertPts.length < 2) return;
+
+    // Sort by z to connect adjacent lines
+    vertPts.sort((a,b) => a.z - b.z);
+
+    // Create thin line connecting all symbols at this timestamp
+    const geo = new THREE.BufferGeometry().setFromPoints(vertPts);
+    const mat = new THREE.LineBasicMaterial({
+      color: 0x00ff41,
+      transparent: true,
+      opacity: 0.08
+    });
+    const line = new THREE.Line(geo, mat);
+    line.userData = { isConnector: true };
+    scene.add(line);
+    connectorObjects.push(line);
+  });
+
+  return connectorObjects;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  MAIN RENDER
+// ═══════════════════════════════════════════════════════════════
+function render3D(data) {
+  currentData = data;
+  const syms  = data.symbols.slice(0, 27);
+
+  if (visibleSyms.size === 0) syms.forEach(s => visibleSyms.add(s));
+
+  // UI update
+  const total = Object.values(data.profits).reduce((a,b)=>a+b, 0);
+  const el = document.getElementById('totalpnl');
+  el.textContent = fmt(total);
+  el.className = pnlClass(total);
+
+  const now_ts = data.timestamp;
+  document.getElementById('simTime').textContent  = fmtTime(now_ts);
+  document.getElementById('pctDone').textContent  = (data.progress*100).toFixed(1);
+  document.getElementById('prog').style.width     = (data.progress*100)+'%';
+  document.getElementById('symCount').textContent = syms.length;
+  document.getElementById('openCount').textContent = Object.keys(data.open_positions||{}).length;
+
+  clearScene();
+
+  // Map of sym -> array of Vector3 with .userData_ts attached for connector building
+  const symPtsMap = new Map();
+
+  // Per-symbol extruded curves
+  syms.forEach((sym, idx) => {
+    const hist   = data.history[sym] || [];
+    if (hist.length < 2) return;
+
+    const pnl    = data.profits[sym] || 0;
+    const col    = new THREE.Color(pnlColor(pnl));
+    const zPos   = idx - 13;
+    const pts    = [];
+    const allObjects = [];  // FIX #2: track ALL objects for this symbol
+
+    hist.forEach(([ts, cum]) => {
+      const x = (ts - now_ts) / 3600;
+      const y = yScale(cum);  // FIX #1: unified scale
+      const v = new THREE.Vector3(x, y, zPos);
+      v.userData_ts = ts;  // attach timestamp for connector lookup
+      pts.push(v);
+
+      const sm = new THREE.MeshStandardMaterial({color:col, emissive:col, emissiveIntensity:.3});
+      const s  = new THREE.Mesh(new THREE.SphereGeometry(.1, 12, 12), sm);
+      s.position.set(x, y, zPos);
+      s.userData = { symbol: sym };
+      scene.add(s);
+      raycastable.push(s);
+      allObjects.push(s);  // FIX #2: add sphere to symbol's object list
+    });
+
+    // Store for connector building
+    symPtsMap.set(sym, pts);
+
+    // Unrealised PnL tail
+    const pos = (data.open_positions||{})[sym];
+    if (pos) {
+      const lastPt  = pts[pts.length - 1];
+      const curY    = yScale(pnl);
+      const tailPts = [lastPt.clone(), new THREE.Vector3(0, curY, zPos)];
+      const tailMesh = mkTube(tailPts, new THREE.Color(0xffdd00), 0.05, 0.5);
+      if (tailMesh) {
+        tailMesh.userData = { symbol: sym };
+        scene.add(tailMesh);
+        raycastable.push(tailMesh);
+        allObjects.push(tailMesh);  // FIX #2
+      }
+    }
+
+    const tube = mkTube(pts, col);
+    if (tube) {
+      tube.userData = { symbol: sym };
+      scene.add(tube);
+      raycastable.push(tube);
+      allObjects.push(tube);  // FIX #2
+    }
+
+    // Float label
+    const lp    = pts[pts.length - 1];
+    const short = pnl >= 0 ? `+$${pnl.toFixed(0)}` : `-$${Math.abs(pnl).toFixed(0)}`;
+    const div   = document.createElement('div');
+    div.textContent = `${sym.slice(0,3)}/${sym.slice(3)} ${short}`;
+    Object.assign(div.style, {
+      color: pnlColor(pnl), fontSize:'9px', fontWeight:'700', fontFamily:'JetBrains Mono,monospace',
+      background:'rgba(1,1,5,.85)', padding:'3px 9px', borderRadius:'12px',
+      border:`1px solid ${pnlColor(pnl)}`, cursor:'pointer'
+    });
+    div.addEventListener('mouseenter', e => showTip(sym, data, e));
+    div.addEventListener('mousemove',  updateTipPos);
+    div.addEventListener('mouseleave', hideTip);
+    const lbl = new CSS2DObject(div);
+    lbl.position.set(lp.x + .4, lp.y + .3, zPos);
+    scene.add(lbl);
+
+    // FIX #2: store as { objects, label } — label is CSS2DObject handled separately
+    symbolMeshes.set(sym, { objects: allObjects, label: lbl });
+  });
+
+  // FIX #3: build cross-connectors between all symbol lines
+  const connectors = buildConnectors(symPtsMap, now_ts);
+
+  // ── FIX #1 + #4: Aggregate total equity curve ──────────────────
+  // Uses SAME yScale as per-symbol lines; z = front face of the 3D block (z = 14)
+  {
+    // Build proper cumulative PnL by accumulating incremental changes per timestamp
+    const cumByTs = new Map();
+    syms.forEach(sym => {
+      let prev = 0;
+      (data.history[sym]||[]).forEach(([ts, cum]) => {
+        cumByTs.set(ts, (cumByTs.get(ts)||0) + (cum - prev));
+        prev = cum;
+      });
+    });
+
+    const sorted = [...cumByTs.entries()].sort((a,b)=>a[0]-b[0]);
+    let cum = 0;
+    const allPts = [];
+    sorted.forEach(([ts, delta]) => {
+      cum += delta;
+      // FIX #1 + #4: use SAME yScale — now the aggregate line sits at the correct Y
+      // FIX #4: place at z=14 (just in front of the last symbol row at z=13) so it's visible but distinct
+      allPts.push(new THREE.Vector3((ts - now_ts)/3600, yScale(cum), 14));
+    });
+
+    if (allPts.length > 1) {
+      // Slightly thicker tube, white+blue tint, so it's visually distinct as "total"
+      const totalTube = mkTube(allPts, new THREE.Color(0xffffff), 0.14);
+      if (totalTube) {
+        totalTube.material.emissive    = new THREE.Color(0x8899ff);
+        totalTube.material.emissiveIntensity = 0.5;
+        totalTube.userData = { symbol: '__total__' };
+        scene.add(totalTube);
+        raycastable.push(totalTube);
+      }
+
+      // Label for total equity line
+      const lastPt = allPts[allPts.length - 1];
+      const totalDiv = document.createElement('div');
+      totalDiv.textContent = `TOTAL  ${fmt(total)}`;
+      Object.assign(totalDiv.style, {
+        color: '#8899ff', fontSize:'10px', fontWeight:'700', fontFamily:'JetBrains Mono,monospace',
+        background:'rgba(1,1,5,.9)', padding:'4px 10px', borderRadius:'12px',
+        border:'1px solid #8899ff88'
+      });
+      const totalLbl = new CSS2DObject(totalDiv);
+      totalLbl.position.set(lastPt.x + .4, lastPt.y + .4, 14);
+      scene.add(totalLbl);
+    }
+  }
+
+  updateVisibility(connectors);
+  buildFilterPanel(syms, data);
+}
+
+// FIX #2: updateVisibility now controls ALL objects (meshes + label) per symbol
+function updateVisibility(connectors) {
+  symbolMeshes.forEach(({ objects, label }, sym) => {
+    const v = visibleSyms.has(sym);
+    objects.forEach(o => { o.visible = v; });  // spheres, tubes, tails — all together
+    if (label) label.visible = v;
+  });
+
+  // Connectors: show if at least 2 symbols visible
+  if (connectors) {
+    const anyVisible = visibleSyms.size >= 2;
+    connectors.forEach(c => { c.visible = anyVisible; });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  TRADE HISTORY PANEL
+// ═══════════════════════════════════════════════════════════════
+function updateTradeHistory(data) {
+  const trades  = (data.trades || []).slice().reverse();
+  const open    = data.open_positions || {};
+
+  const wins = trades.filter(t => t.pnl > 0).length;
+  const wr   = trades.length ? (wins/trades.length*100).toFixed(0)+'%' : '—';
+  const avg  = trades.length ? trades.reduce((a,t)=>a+t.pnl,0)/trades.length : null;
+  const best = trades.length ? Math.max(...trades.map(t=>t.pnl)) : null;
+  const worst= trades.length ? Math.min(...trades.map(t=>t.pnl)) : null;
+
+  document.getElementById('sTrades').textContent  = trades.length;
+  document.getElementById('sWinRate').textContent = wr;
+  document.getElementById('sAvg').textContent     = avg !== null ? fmt(avg) : '—';
+  document.getElementById('sAvg').className       = avg !== null ? 'val '+pnlClass(avg) : 'val';
+  document.getElementById('sBest').textContent    = best !== null ? fmt(best) : '—';
+  document.getElementById('sWorst').textContent   = worst !== null ? fmt(worst) : '—';
+
+  const list = document.getElementById('tradeList');
+  const frags = [];
+
+  Object.entries(open).forEach(([sym, p]) => {
+    const upnl = p.unrealized_pnl || 0;
+    frags.push(`
+      <div class="trade-item open">
+        <div class="trade-header">
+          <span class="trade-sym">${sym.slice(0,3)}/${sym.slice(3)}</span>
+          <span class="trade-pnl live">${fmt(upnl)}</span>
+        </div>
+        <div class="trade-meta">
+          <span class="trade-dir-${p.type.toLowerCase()}">${p.type}</span>
+          &nbsp;·&nbsp;open ${fmtTime(p.open_time)}
+          &nbsp;·&nbsp;closes ${fmtTime(p.close_time)}
+          &nbsp;<span class="trade-open-badge">LIVE</span>
+        </div>
+      </div>`);
+  });
+
+  trades.slice(0, 40).forEach(t => {
+    const pc = pnlClass(t.pnl);
+    frags.push(`
+      <div class="trade-item ${pc}">
+        <div class="trade-header">
+          <span class="trade-sym">${t.symbol.slice(0,3)}/${t.symbol.slice(3)}</span>
+          <span class="trade-pnl ${pc}">${fmt(t.pnl)}</span>
+        </div>
+        <div class="trade-meta">
+          <span class="trade-dir-${t.type.toLowerCase()}">${t.type}</span>
+          &nbsp;·&nbsp;${fmtTime(t.open_time)} → ${fmtTime(t.close_time)}
+          &nbsp;·&nbsp;${fmtDur(t.open_time,t.close_time)} hold
+        </div>
+      </div>`);
+  });
+
+  list.innerHTML = frags.join('');
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  FILTER PANEL
+// ═══════════════════════════════════════════════════════════════
+function getCurrencyGroup(s) {
+  for (const [cur, flag] of [['USD','🇺🇸'],['EUR','🇪🇺'],['GBP','🇬🇧'],['JPY','🇯🇵'],['CHF','🇨🇭'],['CAD','🇨🇦'],['AUD','🇦🇺'],['NZD','🇳🇿']]) {
+    if (s.includes(cur)) return `${flag} ${cur}`;
+  }
+  return '🌐 OTHER';
+}
+
+function buildFilterPanel(syms, data) {
+  const groups = {};
+  syms.forEach(s => { const g = getCurrencyGroup(s); (groups[g]||(groups[g]=[])).push(s); });
+
+  const cDiv = document.getElementById('currencyFilters');
+  cDiv.innerHTML = '';
+  Object.entries(groups).forEach(([g, gsyms]) => {
+    const allOn = gsyms.every(s => visibleSyms.has(s));
+    const row = document.createElement('div'); row.className = 'f-item';
+    row.innerHTML = `<input type="checkbox" ${allOn?'checked':''}><label>${g} (${gsyms.length})</label>`;
+    row.querySelector('input').onchange = e => {
+      gsyms.forEach(s => e.target.checked ? visibleSyms.add(s) : visibleSyms.delete(s));
+      updateVisibility(); buildFilterPanel(syms, data);
+    };
+    cDiv.appendChild(row);
+  });
+
+  const sDiv = document.getElementById('symList');
+  sDiv.innerHTML = '';
+  syms.forEach(s => {
+    const pnl  = data.profits[s] || 0;
+    const row  = document.createElement('div'); row.className = 'f-item';
+    row.innerHTML = `<input type="checkbox" ${visibleSyms.has(s)?'checked':''}><label style="color:${pnlColor(pnl)}">${s}</label>`;
+    row.querySelector('input').onchange = e => {
+      e.target.checked ? visibleSyms.add(s) : visibleSyms.delete(s);
+      updateVisibility(); buildFilterPanel(syms, data);
+    };
+    sDiv.appendChild(row);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  PANEL TOGGLES
+// ═══════════════════════════════════════════════════════════════
+function makeToggle(toggleId, panelId, openArrow, closeArrow) {
+  const btn   = document.getElementById(toggleId);
+  const panel = document.getElementById(panelId);
+  let hidden  = false;
+  btn.addEventListener('click', () => {
+    hidden = !hidden;
+    panel.classList.toggle('hidden', hidden);
+    btn.textContent = hidden ? closeArrow : openArrow;
+  });
+}
+makeToggle('histToggle',   'histPanel',   '◀', '▶');
+makeToggle('filterToggle', 'filterPanel', '▶', '◀');
+
+document.getElementById('btnAll').addEventListener('click', () => {
+  if (!currentData) return;
+  currentData.symbols.slice(0,27).forEach(s => visibleSyms.add(s));
+  updateVisibility(); buildFilterPanel(currentData.symbols.slice(0,27), currentData);
+});
+document.getElementById('btnNone').addEventListener('click', () => {
+  visibleSyms.clear(); updateVisibility();
+  if (currentData) buildFilterPanel(currentData.symbols.slice(0,27), currentData);
+});
+
+// ═══════════════════════════════════════════════════════════════
+//  ANIMATION LOOP
+// ═══════════════════════════════════════════════════════════════
+(function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+  css2d.render(scene, camera);
+})();
+
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  css2d.setSize(innerWidth, innerHeight);
+});
+
+// ═══════════════════════════════════════════════════════════════
+//  SERVER-SENT EVENTS
+// ═══════════════════════════════════════════════════════════════
+const liveEl = document.getElementById('liveIndicator');
+
+async function initData() {
+  try {
+    const r = await fetch('/data');
+    if (r.ok) {
+      const d = await r.json();
+      if (d.symbols) { render3D(d); updateTradeHistory(d); }
+    }
+  } catch(e) { /* server not ready yet */ }
+}
+
+function connectSSE() {
+  const es = new EventSource('/events');
+
+  es.onopen = () => {
+    liveEl.textContent = '⬤ live';
+    liveEl.className   = 'connected';
+  };
+
+  es.onmessage = e => {
+    try {
+      const data = JSON.parse(e.data);
+      if (!data.symbols) return;
+      render3D(data);
+      updateTradeHistory(data);
+    } catch(_) {}
+  };
+
+  es.onerror = () => {
+    liveEl.textContent = '⬤ reconnecting…';
+    liveEl.className   = '';
+    es.close();
+    setTimeout(connectSSE, 2000);
+  };
+}
+
+initData().then(connectSSE);
+</script>
+</body>
+</html>
