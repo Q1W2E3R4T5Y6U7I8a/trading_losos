@@ -19,8 +19,26 @@ _clients: list[queue.Queue] = []
 _lock = threading.Lock()
 _latest: dict = {}
 _template: str = ""
-_current_strategy: str = "ma"  # 'ma' or 'rsi'
+_current_strategy: str = "ma"
 _current_data_file: str = MA_DATA_FILE
+
+# Track which symbols belong to which strategy (based on magic number)
+# You can manually specify or auto-detect
+MA_SYMBOLS = [
+    "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD",
+    "EURGBP", "EURJPY", "EURCHF", "EURAUD", "EURCAD", "EURNZD",
+    "GBPJPY", "GBPCHF", "GBPAUD", "GBPCAD", "GBPNZD",
+    "AUDJPY", "AUDCHF", "AUDCAD", "AUDNZD",
+    "CADJPY", "CADCHF", "CHFJPY", "NZDJPY", "NZDCAD",
+]
+
+RSI_SYMBOLS = [
+    "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD",
+    "EURGBP", "EURJPY", "EURCHF", "EURAUD", "EURCAD", "EURNZD",
+    "GBPJPY", "GBPCHF", "GBPAUD", "GBPCAD", "GBPNZD",
+    "AUDJPY", "AUDCHF", "AUDCAD", "AUDNZD",
+    "CADJPY", "CADCHF", "CHFJPY", "NZDJPY", "NZDCAD",
+]
 
 
 def load_template():
@@ -41,6 +59,39 @@ def broadcast(data: dict):
                 pass
 
 
+def filter_data_by_strategy(data: dict, strategy: str) -> dict:
+    """Filter the data to only show trades from the selected strategy"""
+    if data is None or "symbols" not in data:
+        return data
+    
+    # Determine which symbols to keep
+    allowed_symbols = MA_SYMBOLS if strategy == "ma" else RSI_SYMBOLS
+    
+    # Create filtered copy
+    filtered_data = data.copy()
+    
+    # Filter symbols list
+    filtered_data["symbols"] = [s for s in data["symbols"] if s in allowed_symbols]
+    
+    # Filter profits
+    if "profits" in filtered_data:
+        filtered_data["profits"] = {k: v for k, v in data["profits"].items() if k in allowed_symbols}
+    
+    # Filter history
+    if "history" in filtered_data:
+        filtered_data["history"] = {k: v for k, v in data["history"].items() if k in allowed_symbols}
+    
+    # Filter open positions
+    if "open_positions" in filtered_data:
+        filtered_data["open_positions"] = {k: v for k, v in data["open_positions"].items() if k in allowed_symbols}
+    
+    # Filter trades
+    if "trades" in filtered_data:
+        filtered_data["trades"] = [t for t in data["trades"] if t.get("symbol") in allowed_symbols]
+    
+    return filtered_data
+
+
 def switch_strategy(strategy: str):
     """Switch between MA and RSI strategies"""
     global _current_strategy, _current_data_file, _latest
@@ -53,7 +104,9 @@ def switch_strategy(strategy: str):
     if os.path.exists(_current_data_file):
         try:
             with open(_current_data_file, "r") as f:
-                _latest = json.load(f)
+                raw_data = json.load(f)
+            # Filter the data to only show this strategy's symbols
+            _latest = filter_data_by_strategy(raw_data, strategy)
             broadcast(_latest)
         except Exception as e:
             print(f"  Error loading {strategy} data: {e}")
@@ -72,13 +125,10 @@ class Handler(BaseHTTPRequestHandler):
             self._ok("application/json", json.dumps(_latest).encode())
 
         elif self.path == "/strategy":
-            # Return current strategy info
             info = {
                 "current": _current_strategy,
                 "ma_available": os.path.exists(MA_DATA_FILE),
                 "rsi_available": os.path.exists(RSI_DATA_FILE),
-                "ma_path": MA_DATA_FILE,
-                "rsi_path": RSI_DATA_FILE
             }
             self._ok("application/json", json.dumps(info).encode())
 
@@ -152,13 +202,12 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
 
 
 def watch_file():
-    """Watch the currently selected data file"""
+    """Watch the currently selected data file and filter by strategy"""
     last_mtime = 0.0
     last_file = None
     
     while True:
         try:
-            # Check if we need to switch files
             current_file = _current_data_file
             
             if os.path.exists(current_file):
@@ -167,13 +216,17 @@ def watch_file():
                     last_mtime = mtime
                     last_file = current_file
                     with open(current_file, "r") as f:
-                        data = json.load(f)
-                    broadcast(data)
-                    total = sum(data.get("profits", {}).values())
-                    ts = datetime.fromtimestamp(data["timestamp"]).strftime("%H:%M:%S")
-                    pct = data.get("progress", 0) * 100
+                        raw_data = json.load(f)
+                    # Apply strategy filtering
+                    filtered_data = filter_data_by_strategy(raw_data, _current_strategy)
+                    broadcast(filtered_data)
+                    
+                    total = sum(filtered_data.get("profits", {}).values())
+                    ts = datetime.fromtimestamp(filtered_data["timestamp"]).strftime("%H:%M:%S")
+                    pct = filtered_data.get("progress", 0) * 100
                     strategy_indicator = "📈 MA" if _current_strategy == "ma" else "📉 RSI"
-                    print(f"\r  [{ts}] {strategy_indicator}  TOTAL: ${total:+.2f}  |  {pct:.1f}%  |  open: {len(data.get('open_positions', {}))}   ", end="", flush=True)
+                    symbols_shown = len(filtered_data.get("symbols", []))
+                    print(f"\r  [{ts}] {strategy_indicator}  TOTAL: ${total:+.2f}  |  {pct:.1f}%  |  open: {len(filtered_data.get('open_positions', {}))}  |  showing: {symbols_shown}/27", end="", flush=True)
         except Exception as e:
             print(f"\n  watch error: {e}")
         time.sleep(0.4)
@@ -182,7 +235,6 @@ def watch_file():
 def main():
     load_template()
     
-    # Start with MA strategy if available, else RSI
     if os.path.exists(MA_DATA_FILE):
         switch_strategy("ma")
     elif os.path.exists(RSI_DATA_FILE):
@@ -196,7 +248,7 @@ def main():
     print(f"\n  🚀 3D VIEWER  →  {url}")
     print(f"  📁 MA data  →  {MA_DATA_FILE}")
     print(f"  📁 RSI data →  {RSI_DATA_FILE}")
-    print(f"  🎮 Use buttons below to switch strategies\n")
+    print(f"  🎮 Buttons show ONLY the selected strategy's trades\n")
     
     threading.Timer(1.0, webbrowser.open, args=[url]).start()
     

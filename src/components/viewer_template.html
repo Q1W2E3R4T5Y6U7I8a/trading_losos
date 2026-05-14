@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>MA CROSSOVER // 3D TRADE FLOW</title>
+<title>3D TRADE FLOW // MA + RSI</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -149,7 +149,7 @@ body { overflow: hidden; background: var(--bg); color: var(--g); font-family: 'J
   <div id="stats">
     <div>TIME <b id="simTime">--:--:--</b></div>
     <div>OPEN <b id="openCount">0</b> / <b id="symCount">27</b></div>
-    <div>SIM&nbsp; <b id="pctDone">0.0</b>%</div>
+    <div>UPTIME <b id="pctDone">0.0</b>%</div>
   </div>
 </div>
 
@@ -187,7 +187,7 @@ body { overflow: hidden; background: var(--bg); color: var(--g); font-family: 'J
 <div id="tip"></div>
 <div id="liveIndicator">⬤ connecting…</div>
 
-<!-- Add this after the botbar div or before the closing </body> -->
+<!-- Strategy Selector Buttons -->
 <div style="position: fixed; bottom: 50px; left: 50%; transform: translateX(-50%); z-index: 200; pointer-events: auto; background: rgba(1,1,5,0.95); backdrop-filter: blur(12px); border: 1px solid #00ff4144; border-radius: 40px; padding: 6px 12px; display: flex; gap: 8px;">
     <button id="btnMA" style="background: #00ff4114; border: 1px solid #00ff4166; color: #00ff41; font-family: monospace; font-size: 11px; padding: 6px 16px; border-radius: 30px; cursor: pointer; transition: all 0.2s;">📈 MA CROSSOVER</button>
     <button id="btnRSI" style="background: #00ff4114; border: 1px solid #00ff4166; color: #00ff41; font-family: monospace; font-size: 11px; padding: 6px 16px; border-radius: 30px; cursor: pointer; transition: all 0.2s;">📉 RSI REVERSION</button>
@@ -235,11 +235,9 @@ async function switchStrategy(strategy) {
         
         if (response.ok) {
             setActiveButton(strategy);
-            // Visual feedback
             strategyIndicator.style.opacity = '0.5';
             setTimeout(() => { strategyIndicator.style.opacity = '1'; }, 200);
             
-            // Force refresh data
             const dataRes = await fetch('/data');
             const newData = await dataRes.json();
             if (newData.symbols) {
@@ -260,7 +258,6 @@ async function switchStrategy(strategy) {
 btnMA.addEventListener('click', () => switchStrategy('ma'));
 btnRSI.addEventListener('click', () => switchStrategy('rsi'));
 
-// Get current strategy on load
 async function getCurrentStrategy() {
     try {
         const res = await fetch('/strategy');
@@ -286,7 +283,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 
 // ========== CORE CONSTANTS ==========
-const Y_SCALE = 20 / 48;        // unified scale: maps cumulative PnL (max ~48) to y-range [0,20]
+const Y_SCALE = 20 / 48;
 const yScale = cum => Math.max(-5, Math.min(22, cum * Y_SCALE));
 const pnlColor = v => v > 0.8 ? '#00ff41' : v < -0.8 ? '#ff3344' : '#ffdd00';
 const pnlClass = v => v > 0.8 ? 'pos' : v < -0.8 ? 'neg' : 'neu';
@@ -297,8 +294,7 @@ const fmtDur = (a, b) => { const h = Math.round((b - a) / 3600); return h + 'h';
 // GLOBAL STATE
 let currentData = null;
 let visibleSyms = new Set();
-let symbolMeshes = new Map();      // symbol -> { objects: [], label: CSS2DObject }
-
+let symbolMeshes = new Map();
 let raycastable = [];
 
 // THREE SCENE
@@ -358,6 +354,7 @@ function mkLabel(text, x, y, z, color = '#aaa', size = '8px') {
   obj.position.set(x, y, z);
   scene.add(obj);
 }
+
 // Time axis ticks
 [-24, -20, -16, -12, -8, -4, 0, 4, 8].forEach(h => {
   if (h < -26 || h > 16) return;
@@ -434,44 +431,14 @@ function clearScene() {
   symbolMeshes.clear();
 }
 
-// Build vertical connectors between symbols at matching timestamps
-function buildConnectors(symPtsMap, nowTs) {
-  const allTs = new Set();
-  symPtsMap.forEach(pts => pts.forEach(p => allTs.add(p.userData_ts)));
-  const sortedTs = [...allTs].sort((a, b) => a - b);
-  const step = Math.max(1, Math.floor(sortedTs.length / 24));
-  const connectors = [];
-  const symKeys = [...symPtsMap.keys()];
-  sortedTs.forEach((ts, idx) => {
-    if (idx % step !== 0) return;
-    const vertPts = [];
-    symKeys.forEach(sym => {
-      const pts = symPtsMap.get(sym);
-      const match = pts.reduce((best, p) => Math.abs(p.userData_ts - ts) < Math.abs(best.userData_ts - ts) ? p : best, pts[0]);
-      if (match) vertPts.push(new THREE.Vector3(match.x, match.y, match.z));
-    });
-    if (vertPts.length < 2) return;
-    vertPts.sort((a, b) => a.z - b.z);
-    const geo = new THREE.BufferGeometry().setFromPoints(vertPts);
-    const mat = new THREE.LineBasicMaterial({ color: 0x00ff41, transparent: true, opacity: 0.475 });
-    const line = new THREE.Line(geo, mat);
-    line.userData = { isConnector: true };
-    scene.add(line);
-    connectors.push(line);
-  });
-  return connectors;
-}
-
 function updateVisibility() {
-  const anyVisible = visibleSyms.size >= 2;
   symbolMeshes.forEach(({ objects, label }, sym) => {
     const v = visibleSyms.has(sym);
     objects.forEach(obj => { if (obj) obj.visible = v; });
     if (label) {
       label.visible = v;
-      // Make deselected labels much more transparent
       if (label.element) {
-        label.element.style.opacity = v ? '0' : '0';  // 0.08 = 8% opacity when deselected
+        label.element.style.opacity = v ? '0' : '0';
       }
     }
   });
@@ -483,6 +450,7 @@ function getCurrencyGroup(s) {
   for (const [cur, flag] of pairs) if (s.includes(cur)) return flag;
   return '🌐 OTHER';
 }
+
 function buildFilterPanel(syms, data) {
   const groups = {};
   syms.forEach(s => { const g = getCurrencyGroup(s); groups[g] = groups[g] || []; groups[g].push(s); });
@@ -543,10 +511,11 @@ function updateTradeHistory(data) {
   list.innerHTML = frags.join('');
 }
 
-// MAIN 3D RENDER
+// MAIN 3D RENDER - FIXED FOR REAL-TIME DATA
 function render3D(data) {
   currentData = data;
-  const syms = data.symbols.slice(0, 27);
+  let syms = data.symbols.slice(0, 27);
+  
   if (visibleSyms.size === 0) syms.forEach(s => visibleSyms.add(s));
   
   // Top bar update
@@ -555,30 +524,57 @@ function render3D(data) {
   totalEl.textContent = fmt(totalPnl);
   totalEl.className = pnlClass(totalPnl);
   document.getElementById('simTime').textContent = fmtTime(data.timestamp);
-  document.getElementById('pctDone').textContent = (data.progress * 100).toFixed(1);
+  
+  // Show uptime percentage
+  const uptimePercent = (data.progress * 100).toFixed(1);
+  document.getElementById('pctDone').textContent = uptimePercent;
   document.getElementById('prog').style.width = (data.progress * 100) + '%';
   document.getElementById('symCount').textContent = syms.length;
   document.getElementById('openCount').textContent = Object.keys(data.open_positions || {}).length;
   
   clearScene();
   
+  const nowTs = data.timestamp;
   const symPtsMap = new Map();
-  // Draw per-symbol tubes
+  
+  // Debug: Log what we're rendering
+  console.log(`Rendering ${syms.length} symbols, current time: ${new Date(nowTs * 1000).toLocaleTimeString()}`);
+  
   syms.forEach((sym, idx) => {
     const hist = data.history[sym] || [];
-    if (hist.length < 2) return;
+    
+    // Debug: Check if symbol has history
+    if (hist.length === 0) {
+      console.log(`⚠️ ${sym}: No history data`);
+      return;
+    }
+    
+    console.log(`✅ ${sym}: ${hist.length} history points`);
+    
     const pnlVal = data.profits?.[sym] || 0;
     const col = new THREE.Color(pnlColor(pnlVal));
     const zPos = idx - 13;
     const pts = [];
     const objects = [];
     
+    // Calculate time range for scaling
+    let minX = 0, maxX = 0;
+    
     hist.forEach(([ts, cum]) => {
-      const x = (ts - data.timestamp) / 3600;
+      // Calculate X position: hours relative to NOW
+      const hoursAgo = (nowTs - ts) / 3600;
+      const x = Math.min(0, -hoursAgo);
+      
+      // Track range for debugging
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      
       const y = yScale(cum);
       const v = new THREE.Vector3(x, y, zPos);
       v.userData_ts = ts;
       pts.push(v);
+      
+      // Create sphere at each point
       const sphereMat = new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 0.35 });
       const sphere = new THREE.Mesh(new THREE.SphereGeometry(0.095, 12, 12), sphereMat);
       sphere.position.set(x, y, zPos);
@@ -587,96 +583,112 @@ function render3D(data) {
       raycastable.push(sphere);
       objects.push(sphere);
     });
+    
+    console.log(`  📊 ${sym}: X range [${minX.toFixed(1)}h, ${maxX.toFixed(1)}h]`);
+    
     symPtsMap.set(sym, pts);
     
-    const tube = mkTube(pts, col);
-    if (tube) {
-      tube.userData = { symbol: sym };
-      scene.add(tube);
-      raycastable.push(tube);
-      objects.push(tube);
-    }
-    
-    // Open position tail (yellow)
-    const pos = (data.open_positions || {})[sym];
-    if (pos && pts.length) {
-      const lastPt = pts[pts.length - 1];
-      const curY = yScale(pnlVal);
-      const tailPts = [lastPt.clone(), new THREE.Vector3(0, curY, zPos)];
-      const tailTube = mkTube(tailPts, new THREE.Color(0xffaa00), 0.055, 0.65);
-      if (tailTube) {
-        tailTube.userData = { symbol: sym };
-        scene.add(tailTube);
-        raycastable.push(tailTube);
-        objects.push(tailTube);
+    // Draw tube if we have at least 2 points
+    if (pts.length >= 2) {
+      const tube = mkTube(pts, col);
+      if (tube) {
+        tube.userData = { symbol: sym };
+        scene.add(tube);
+        raycastable.push(tube);
+        objects.push(tube);
       }
     }
     
-    // Label
-    const lastP = pts[pts.length - 1];
+    // Open position tail (yellow line to "now")
+    const pos = (data.open_positions || {})[sym];
+    if (pos && pts.length > 0) {
+      const lastPt = pts[pts.length - 1];
+      const curY = yScale(pnlVal);
+      // Only draw tail if last point is not already at "now"
+      if (lastPt.x < -0.1) {  // If last point is more than 0.1 hours ago
+        const tailPts = [lastPt.clone(), new THREE.Vector3(0, curY, zPos)];
+        const tailTube = mkTube(tailPts, new THREE.Color(0xffaa00), 0.055, 0.65);
+        if (tailTube) {
+          tailTube.userData = { symbol: sym };
+          scene.add(tailTube);
+          raycastable.push(tailTube);
+          objects.push(tailTube);
+        }
+      }
+    }
+    
+    // Label at the most recent point (or current position)
+    let labelX, labelY;
+    if (pts.length > 0) {
+      const lastP = pts[pts.length - 1];
+      labelX = lastP.x + 0.45;
+      labelY = lastP.y + 0.35;
+    } else {
+      labelX = 0;
+      labelY = yScale(pnlVal);
+    }
+    
     const short = pnlVal >= 0 ? `+$${pnlVal.toFixed(0)}` : `-$${Math.abs(pnlVal).toFixed(0)}`;
     const div = document.createElement('div');
     div.textContent = `${sym} ${short}`;
     Object.assign(div.style, {
       color: pnlColor(pnlVal), fontSize: '9px', fontWeight: '700', fontFamily: 'JetBrains Mono, monospace',
-      background: 'rgba(1,1,5,0.5)', padding: '3px 9px', borderRadius: '12px',
-      border: `1px solid ${pnlColor(pnlVal)}`, cursor: 'pointer', whiteSpace: 'nowrap',
-      opacity: '0.4'
+      background: 'rgba(1,1,5,0.7)', padding: '3px 9px', borderRadius: '12px',
+      border: `1px solid ${pnlColor(pnlVal)}`, cursor: 'pointer', whiteSpace: 'nowrap'
     });
     div.addEventListener('mouseenter', e => showTip(sym, data, e));
     div.addEventListener('mousemove', updateTipPos);
     div.addEventListener('mouseleave', hideTip);
     const label = new CSS2DObject(div);
-    label.position.set(lastP.x + 0.45, lastP.y + 0.35, zPos);
+    label.position.set(labelX, labelY, zPos);
     scene.add(label);
     symbolMeshes.set(sym, { objects, label });
   });
   
-
-  // ----- AGGREGATE TOTAL EQUITY LINE (z = 14, same scale) -----
-  const cumByTs = new Map();
-  syms.forEach(sym => {
-    let prev = 0;
-    (data.history[sym] || []).forEach(([ts, cum]) => {
-      const delta = cum - prev;
-      cumByTs.set(ts, (cumByTs.get(ts) || 0) + delta);
-      prev = cum;
-    });
-  });
-  const sortedCum = [...cumByTs.entries()].sort((a, b) => a[0] - b[0]);
-  let running = 0;
-  const totalPts = [];
-  sortedCum.forEach(([ts, delta]) => {
-    running += delta;
-    totalPts.push(new THREE.Vector3((ts - data.timestamp) / 3600, yScale(running), 14));
-  });
-  if (totalPts.length > 1) {
-    const totalTube = mkTube(totalPts, new THREE.Color(0x88aaff), 0.13);
-    if (totalTube) {
-      totalTube.material.emissive = new THREE.Color(0x4488cc);
-      totalTube.material.emissiveIntensity = 0.55;
-      totalTube.userData = { symbol: '__total__' };
-      scene.add(totalTube);
-      raycastable.push(totalTube);
+  // Also draw open positions that have no history (just opened)
+  const openPositions = data.open_positions || {};
+  for (const [sym, pos] of Object.entries(openPositions)) {
+    if (!syms.includes(sym)) continue;
+    
+    const hasHistory = (data.history[sym] || []).length > 0;
+    if (!hasHistory && symbolMeshes.has(sym) === false) {
+      // New position with no history yet - draw a single point at "now"
+      const pnlVal = data.profits?.[sym] || 0;
+      const col = new THREE.Color(pnlColor(pnlVal));
+      const zPos = syms.indexOf(sym) - 13;
+      const y = yScale(pnlVal);
+      
+      const sphereMat = new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 0.5 });
+      const sphere = new THREE.Mesh(new THREE.SphereGeometry(0.12, 16, 16), sphereMat);
+      sphere.position.set(0, y, zPos);
+      sphere.userData = { symbol: sym };
+      scene.add(sphere);
+      raycastable.push(sphere);
+      
+      const div = document.createElement('div');
+      div.textContent = `${sym} ${pnlVal >= 0 ? `+$${pnlVal.toFixed(0)}` : `-$${Math.abs(pnlVal).toFixed(0)}`}`;
+      Object.assign(div.style, {
+        color: pnlColor(pnlVal), fontSize: '9px', fontWeight: '700',
+        background: 'rgba(1,1,5,0.7)', padding: '3px 9px', borderRadius: '12px',
+        border: `1px solid ${pnlColor(pnlVal)}`, whiteSpace: 'nowrap'
+      });
+      div.addEventListener('mouseenter', e => showTip(sym, data, e));
+      const label = new CSS2DObject(div);
+      label.position.set(0.45, y + 0.35, zPos);
+      scene.add(label);
+      symbolMeshes.set(sym, { objects: [sphere], label });
     }
-    const lastTot = totalPts[totalPts.length - 1];
-    const totDiv = document.createElement('div');
-    totDiv.textContent = `TOTAL  ${fmt(totalPnl)}`;
-    Object.assign(totDiv.style, {
-      color: '#aaccff', fontSize: '10px', fontWeight: '700', fontFamily: 'JetBrains Mono, monospace',
-      background: 'rgba(1,1,5,.92)', padding: '4px 10px', borderRadius: '14px',
-      border: '1px solid #88aaffaa'
-    });
-    const totalLabel = new CSS2DObject(totDiv);
-    totalLabel.position.set(lastTot.x + 0.55, lastTot.y + 0.45, 14);
-    scene.add(totalLabel);
   }
   
   updateVisibility();
   buildFilterPanel(syms, data);
   updateTradeHistory(data);
+  
+  // Adjust camera to see all symbols if needed
+  if (syms.length > 0) {
+    console.log(`✅ 3D rendering complete - ${symbolMeshes.size} symbols visible`);
+  }
 }
-
 // Panel toggles
 function makeToggle(toggleId, panelId, openArrow, closeArrow) {
   const btn = document.getElementById(toggleId);

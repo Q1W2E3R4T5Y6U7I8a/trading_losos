@@ -24,16 +24,21 @@ RSI_PERIOD   = 14
 RSI_OVERSOLD = 15      # Buy when RSI < 15
 RSI_OVERBOUGHT = 85    # Sell when RSI > 85
 VOLUME       = 0.01
-CLOSE_HOURS  = 4
+CLOSE_HOURS  = 4        # Close after 4 REAL hours
 TIMEFRAME    = mt5.TIMEFRAME_M5
-STEP         = timedelta(minutes=5)
 
 DATA_DIR  = "M:/Projects/trading_losos/data"
-DATA_FILE = f"{DATA_DIR}/rsi_live_data.json"  # Different file name to avoid conflict
+DATA_FILE = f"{DATA_DIR}/rsi_live_data.json"
+
+# Safety settings for REAL trading
+MAX_SPREAD = 50
+SLIPPAGE = 10
+MAGIC_NUMBER = 123458
 
 
-def get_rates(symbol, sim_time, count=100):
-    rates = mt5.copy_rates_from(symbol, TIMEFRAME, sim_time, count)
+def get_rates(symbol, count=100):
+    """Get latest rates from MT5"""
+    rates = mt5.copy_rates_from_pos(symbol, TIMEFRAME, 0, count)
     if rates is None or len(rates) == 0:
         return None
     return pd.DataFrame(rates)
@@ -49,199 +54,358 @@ def calculate_rsi(prices, period=14):
     return rsi
 
 
-def get_signal(symbol, sim_time):
+def get_signal(symbol):
     """Returns BUY if RSI < 15, SELL if RSI > 85, else None"""
-    df = get_rates(symbol, sim_time, 100)
+    df = get_rates(symbol, 100)
     if df is None or len(df) < RSI_PERIOD + 5:
-        return None
+        return None, None
     
     rsi = calculate_rsi(df["close"], RSI_PERIOD)
-    if rsi.iloc[-1] < RSI_OVERSOLD:
-        return "BUY"
-    elif rsi.iloc[-1] > RSI_OVERBOUGHT:
-        return "SELL"
-    return None
+    current_rsi = rsi.iloc[-1]
+    
+    if current_rsi < RSI_OVERSOLD:
+        return "BUY", round(current_rsi, 1)
+    elif current_rsi > RSI_OVERBOUGHT:
+        return "SELL", round(current_rsi, 1)
+    return None, None
 
 
-def get_close_price(symbol, sim_time):
-    df = get_rates(symbol, sim_time, 1)
-    return float(df["close"].iloc[0]) if df is not None else None
+def get_current_price(symbol):
+    """Get current bid/ask prices"""
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        return None, None
+    return tick.ask, tick.bid
 
 
-def calc_pnl(symbol, order_type, open_price, close_price):
-    """P&L in USD for 0.01 lot. Handles JPY cross-rate correctly."""
-    delta = close_price - open_price if order_type == "BUY" else open_price - close_price
+def check_spread(symbol):
+    """Check if spread is acceptable"""
+    symbol_info = mt5.symbol_info(symbol)
+    if symbol_info is None:
+        return False
+    spread = symbol_info.spread
+    if spread > MAX_SPREAD:
+        print(f"  ⚠️ {symbol}: Spread too high ({spread} > {MAX_SPREAD})")
+        return False
+    return True
 
-    if "JPY" in symbol:
-        pips = delta * 100
+
+def place_order(symbol, order_type, volume, rsi_value):
+    """Place REAL order on MT5"""
+    symbol_info = mt5.symbol_info(symbol)
+    if symbol_info is None or symbol_info.trade_mode != mt5.SYMBOL_TRADE_MODE_FULL:
+        return None, None
+    
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        return None, None
+    
+    if order_type == "BUY":
+        price = tick.ask
+        order_type_mt5 = mt5.ORDER_TYPE_BUY
     else:
-        pips = delta * 10_000
-
-    if symbol.startswith("USD"):
-        if "JPY" in symbol:
-            pip_value = 0.10 / close_price * 100
-        else:
-            pip_value = 0.10 / close_price
-    else:
-        pip_value = 0.10
-
-    return round(pips * pip_value, 4)
-
-
-def save_data(sim_time, profits, history, trades, open_positions, progress):
-    payload = {
-        "timestamp":      sim_time.timestamp(),
-        "profits":        profits,
-        "history":        history,
-        "trades":         trades,
-        "open_positions": open_positions,
-        "symbols":        SYMBOLS,
-        "progress":       progress,
+        price = tick.bid
+        order_type_mt5 = mt5.ORDER_TYPE_SELL
+    
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": volume,
+        "type": order_type_mt5,
+        "price": price,
+        "slippage": SLIPPAGE,
+        "magic": MAGIC_NUMBER,
+        "comment": f"RSI_{RSI_PERIOD}_{rsi_value}",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_IOC,
     }
+    
+    print(f"  📝 {symbol}: {order_type} (RSI: {rsi_value}) at {price:.5f}...")
+    result = mt5.order_send(request)
+    
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        print(f"  ❌ {symbol}: Order failed - {result.comment}")
+        return None, None
+    
+    print(f"  ✅ {symbol}: {order_type} order placed! Ticket: {result.order}")
+    return result, result.order
+
+
+def close_position(symbol, position_ticket, volume, order_type):
+    """Close an existing position"""
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        return False, None
+    
+    if order_type == "BUY":
+        price = tick.bid
+        close_type = mt5.ORDER_TYPE_SELL
+    else:
+        price = tick.ask
+        close_type = mt5.ORDER_TYPE_BUY
+    
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": volume,
+        "type": close_type,
+        "position": position_ticket,
+        "price": price,
+        "slippage": SLIPPAGE,
+        "magic": MAGIC_NUMBER,
+        "comment": "Close_RSI_trade",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_IOC,
+    }
+    
+    result = mt5.order_send(request)
+    
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        print(f"  ❌ {symbol}: Close failed - {result.comment}")
+        return False, result
+    
+    print(f"  ✅ {symbol}: Position {position_ticket} closed")
+    return True, result
+
+
+def get_position_pnl(ticket):
+    """Get actual P&L from MT5"""
+    positions = mt5.positions_get(ticket=ticket)
+    if positions and len(positions) > 0:
+        return positions[0].profit
+    
+    # Check closed positions in history
+    deals = mt5.history_deals_get(position=ticket)
+    if deals and len(deals) > 0:
+        return sum(deal.profit + deal.swap + deal.commission for deal in deals)
+    
+    return 0.0
+
+
+def get_live_positions():
+    """Get open positions from MT5"""
+    positions = mt5.positions_get(magic=MAGIC_NUMBER)
+    if positions is None:
+        return {}
+    
+    live_positions = {}
+    for pos in positions:
+        open_time = datetime.utcfromtimestamp(pos.time)
+        if open_time > datetime.utcnow():
+            print(f"  ⚠️ Skipping {pos.symbol} position with future open_time")
+            continue
+        live_positions[pos.symbol] = {
+            "ticket": pos.ticket,
+            "type": "BUY" if pos.type == mt5.POSITION_TYPE_BUY else "SELL",
+            "volume": pos.volume,
+            "open_price": pos.price_open,
+            "open_time": open_time,
+            "current_pnl": pos.profit,
+        }
+    return live_positions
+
+
+def save_data(timestamp, profits, history, trades, open_positions):
+    """Save data for visualization"""
+    payload = {
+        "timestamp": timestamp.timestamp(),
+        "profits": profits,
+        "history": history,
+        "trades": trades,
+        "open_positions": open_positions,
+        "symbols": SYMBOLS,
+        "progress": 0.5,
+    }
+    
     tmp = DATA_FILE + ".tmp"
     with open(tmp, "w") as f:
         json.dump(payload, f)
-    for attempt in range(3):
-        try:
-            os.replace(tmp, DATA_FILE)
-            return
-        except OSError:
-            if attempt < 2:
-                time.sleep(0.1)
-            else:
-                with open(DATA_FILE, "w") as f:
-                    json.dump(payload, f)
+    os.replace(tmp, DATA_FILE)
 
 
 def main():
-    print("  RSI STRATEGY  //  connecting to MT5...")
-    print("  RSI Settings: BUY when RSI < 15, SELL when RSI > 85")
+    print("=" * 70)
+    print("  RSI STRATEGY // REAL TIME TRADING")
+    print(f"  Settings: BUY when RSI < {RSI_OVERSOLD} | SELL when RSI > {RSI_OVERBOUGHT}")
+    print(f"  Period: {RSI_PERIOD} | Volume: {VOLUME} lots | Auto-close: {CLOSE_HOURS}h")
+    print("=" * 70)
+    
+    # Initialize MT5
+    print("\n  Connecting to MetaTrader 5...")
     if not mt5.initialize():
-        print("  MT5 init failed"); return
+        print("  ❌ MT5 initialization failed")
+        return
+    
     if not mt5.login(LOGIN, password=PASSWORD, server=SERVER):
-        print("  Login failed"); mt5.shutdown(); return
-    print("  MT5 connected\n")
-
+        print(f"  ❌ Login failed: {mt5.last_error()}")
+        mt5.shutdown()
+        return
+    
+    print("  ✅ MT5 connected!\n")
+    
+    account_info = mt5.account_info()
+    if account_info:
+        print(f"  Account: {account_info.login} | Balance: ${account_info.balance:.2f}")
+    
     os.makedirs(DATA_DIR, exist_ok=True)
-
-    sim_start   = datetime.now() - timedelta(hours=24)
-    current_sim = sim_start
-
-    positions       = {}
-    cumulative_pnl  = {s: 0.0 for s in SYMBOLS}
-    trade_history   = {s: []  for s in SYMBOLS}
-    closed_trades   = []
-    last_candle     = {}
-    last_rsi_value  = {}  # Store last RSI for debugging
-
-    print(f"  SIM START : {sim_start.strftime('%Y-%m-%d %H:%M')}")
-    print(f"  DATA FILE : {DATA_FILE}\n")
-
+    
+    # Load existing positions
+    positions = {}
+    live_positions = get_live_positions()
+    for symbol, pos in live_positions.items():
+        if symbol in SYMBOLS:
+            positions[symbol] = {
+                "type": pos["type"],
+                "open_price": pos["open_price"],
+                "open_time": pos["open_time"],
+                "close_time": pos["open_time"] + timedelta(hours=CLOSE_HOURS),
+                "ticket": pos["ticket"],
+                "volume": pos["volume"],
+            }
+            print(f"  📌 Loaded existing {symbol} {pos['type']} position")
+    
+    # State tracking
+    cumulative_pnl = {s: 0.0 for s in SYMBOLS}
+    trade_history = {s: [] for s in SYMBOLS}
+    closed_trades = []
+    last_signal_time = {}
+    start_time = datetime.utcnow()
+    
+    print(f"\n  🚀 Real-time RSI Strategy running...")
+    print(f"  📊 Will close positions after {CLOSE_HOURS} hours\n")
+    print("  " + "-" * 66)
+    
     while True:
         try:
-            now = datetime.now()
-
-            while current_sim <= now:
-                for symbol in SYMBOLS:
-                    pos = positions.get(symbol)
-
-                    # ── Close expired positions ──────────────────────────────
-                    if pos and current_sim >= pos["close_time"]:
-                        close_price = get_close_price(symbol, pos["close_time"])
-                        if close_price is None:
-                            close_price = pos["open_price"]
-
-                        pnl = calc_pnl(symbol, pos["type"], pos["open_price"], close_price)
-                        cumulative_pnl[symbol] += pnl
-
-                        trade_history[symbol].append(
-                            (pos["close_time"].timestamp(), round(cumulative_pnl[symbol], 4))
+            now = datetime.utcnow()
+            
+            # Check each symbol
+            for symbol in SYMBOLS:
+                # ── CLOSE EXPIRED POSITIONS (after 4 REAL hours) ────────────
+                if symbol in positions:
+                    pos = positions[symbol]
+                    
+                    if now >= pos["close_time"]:
+                        success, result = close_position(
+                            symbol, pos["ticket"], pos["volume"], pos["type"]
                         )
-
-                        closed_trades.append({
-                            "symbol":      symbol,
-                            "type":        pos["type"],
-                            "open_time":   pos["open_time"].timestamp(),
-                            "close_time":  pos["close_time"].timestamp(),
-                            "open_price":  pos["open_price"],
-                            "close_price": close_price,
-                            "pnl":         pnl,
-                        })
-
-                        print(f"  CLOSE  {symbol:8s} {pos['type']:4s}  pnl={'+' if pnl>=0 else ''}{pnl:.2f}")
+                        
+                        if success:
+                            # Get REAL P&L from MT5
+                            actual_pnl = get_position_pnl(pos["ticket"])
+                            cumulative_pnl[symbol] += actual_pnl
+                            
+                            closed_trades.append({
+                                "symbol": symbol,
+                                "type": pos["type"],
+                                "open_time": pos["open_time"].timestamp(),
+                                "close_time": now.timestamp(),
+                                "open_price": pos["open_price"],
+                                "close_price": result.price if result else 0,
+                                "pnl": actual_pnl,
+                            })
+                            
+                            trade_history[symbol].append(
+                                (now.timestamp(), round(cumulative_pnl[symbol], 4))
+                            )
+                            
+                            print(f"\n  📊 CLOSE {symbol}: {pos['type']} | PnL = ${actual_pnl:+.2f} | Total: ${cumulative_pnl[symbol]:+.2f}")
+                        
                         del positions[symbol]
-                        pos = None
-
-                    # ── Open new positions based on RSI ──────────────────────
-                    if pos is None:
-                        signal = get_signal(symbol, current_sim)
-                        if signal:
-                            rates = mt5.copy_rates_from(symbol, TIMEFRAME, current_sim, 1)
-                            if rates is not None and len(rates) > 0:
-                                candle_time = rates[0]["time"]
-                                if last_candle.get(symbol) != candle_time:
-                                    price = get_close_price(symbol, current_sim)
-                                    if price:
-                                        # Calculate current RSI for logging
-                                        df = get_rates(symbol, current_sim, 100)
-                                        if df is not None:
-                                            rsi = calculate_rsi(df["close"], RSI_PERIOD)
-                                            last_rsi_value[symbol] = round(rsi.iloc[-1], 1)
-                                        
-                                        positions[symbol] = {
-                                            "type":       signal,
-                                            "open_price": price,
-                                            "open_time":  current_sim,
-                                            "close_time": current_sim + timedelta(hours=CLOSE_HOURS),
-                                        }
-                                        last_candle[symbol] = candle_time
-
-                                        trade_history[symbol].append(
-                                            (current_sim.timestamp(), round(cumulative_pnl[symbol], 4))
-                                        )
-                                        
-                                        rsi_info = f" (RSI: {last_rsi_value.get(symbol, '?')})"
-                                        print(f"  OPEN   {symbol:8s} {signal:4s}  @ {price:.5f}  [{current_sim.strftime('%H:%M')}]{rsi_info}")
-
-                # ── Snapshot: live P&L including unrealized ──────────────────
-                live_profits    = {}
-                open_positions  = {}
-                for symbol in SYMBOLS:
-                    pos = positions.get(symbol)
-                    if pos:
-                        cur = get_close_price(symbol, current_sim) or pos["open_price"]
-                        unreal = calc_pnl(symbol, pos["type"], pos["open_price"], cur)
-                        live_profits[symbol] = round(cumulative_pnl[symbol] + unreal, 4)
-                        open_positions[symbol] = {
-                            "type":          pos["type"],
-                            "open_time":     pos["open_time"].timestamp(),
-                            "close_time":    pos["close_time"].timestamp(),
-                            "open_price":    pos["open_price"],
-                            "unrealized_pnl": round(unreal, 4),
-                        }
-                    else:
-                        live_profits[symbol] = round(cumulative_pnl[symbol], 4)
-
-                progress = (current_sim - sim_start).total_seconds() / 86_400
-                save_data(current_sim, live_profits, trade_history,
-                          closed_trades[-200:],
-                          open_positions, progress)
-
-                current_sim += STEP
-
-            total = sum(cumulative_pnl.values())
-            print(f"\r  SIM {current_sim.strftime('%H:%M:%S')}  |  TOTAL: {'+' if total>=0 else ''}{total:.2f}  |  OPEN: {len(positions)}", end="")
+                
+                # ── CHECK FOR NEW RSI SIGNALS ──────────────────────────────
+                if symbol not in positions:
+                    # Rate limit: check every 60 seconds
+                    last = last_signal_time.get(symbol, datetime.min)
+                    if (now - last).total_seconds() < 60:
+                        continue
+                    
+                    # Check spread
+                    if not check_spread(symbol):
+                        continue
+                    
+                    # Get RSI signal
+                    signal, rsi_value = get_signal(symbol)
+                    
+                    if signal:
+                        # Place order
+                        result, ticket = place_order(symbol, signal, VOLUME, rsi_value)
+                        
+                        if result and ticket:
+                            positions[symbol] = {
+                                "type": signal,
+                                "open_price": result.price,
+                                "open_time": now,
+                                "close_time": now + timedelta(hours=CLOSE_HOURS),
+                                "ticket": ticket,
+                                "volume": VOLUME,
+                            }
+                            
+                            trade_history[symbol].append(
+                                (now.timestamp(), round(cumulative_pnl[symbol], 4))
+                            )
+                            
+                            last_signal_time[symbol] = now
+                            print(f"\n  🚀 OPEN  {symbol}: {signal} at {result.price:.5f} | RSI: {rsi_value} | Ticket: {ticket}")
+                            print(f"  ⏰ Will close at: {(now + timedelta(hours=CLOSE_HOURS)).strftime('%H:%M:%S')}")
+            
+            # ── UPDATE VISUALIZATION ───────────────────────────────────────
+            live_profits = {}
+            open_positions_viz = {}
+            
+            for symbol in SYMBOLS:
+                if symbol in positions:
+                    pos = positions[symbol]
+                    current_pnl = get_position_pnl(pos["ticket"])
+                    live_profits[symbol] = round(cumulative_pnl[symbol] + current_pnl, 4)
+                    open_positions_viz[symbol] = {
+                        "type": pos["type"],
+                        "open_time": pos["open_time"].timestamp(),
+                        "close_time": pos["close_time"].timestamp(),
+                        "open_price": pos["open_price"],
+                        "unrealized_pnl": round(current_pnl, 4),
+                    }
+                else:
+                    live_profits[symbol] = round(cumulative_pnl[symbol], 4)
+            
+            save_data(now, live_profits, trade_history, closed_trades[-200:], open_positions_viz)
+            
+            # ── CONSOLE DISPLAY ────────────────────────────────────────────
+            total_realized = sum(cumulative_pnl.values())
+            total_unrealized = sum([get_position_pnl(p["ticket"]) for p in positions.values()])
+            
+            # Get current RSI for display
+            sample_symbol = SYMBOLS[0]
+            df_sample = get_rates(sample_symbol, 50)
+            sample_rsi = "---"
+            if df_sample is not None:
+                rsi_val = calculate_rsi(df_sample["close"], RSI_PERIOD)
+                sample_rsi = f"{rsi_val.iloc[-1]:.1f}"
+            
+            print(f"\r  [{now.strftime('%H:%M:%S')}]  Realized: ${total_realized:+7.2f}  |  Unrealized: ${total_unrealized:+7.2f}  |  Open: {len(positions):2}  |  Closed: {len(closed_trades):3}  |  RSI({sample_symbol}): {sample_rsi}", end="")
+            
+            # Wait 1 second before next check
             time.sleep(1)
-
+            
         except KeyboardInterrupt:
-            print("\n\n  RSI STRATEGY STOPPED"); break
+            print("\n\n  🛑 RSI Strategy stopping...")
+            break
         except Exception as e:
-            print(f"\n  ERR: {e}")
+            print(f"\n  ❌ Error: {e}")
             import traceback
             traceback.print_exc()
-            time.sleep(1)
-
+            time.sleep(5)
+    
+    # Close all remaining positions
+    if positions:
+        print("\n  Closing remaining positions...")
+        for symbol, pos in positions.items():
+            close_position(symbol, pos["ticket"], pos["volume"], pos["type"])
+            time.sleep(0.5)
+    
     mt5.shutdown()
+    print("\n  ✅ MT5 disconnected")
+    print("=" * 70)
 
 
 if __name__ == "__main__":
