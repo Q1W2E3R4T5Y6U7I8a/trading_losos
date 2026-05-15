@@ -8,122 +8,95 @@ import webbrowser
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-PORT = 8765
-DATA_DIR = "M:/Projects/trading_losos/data"
-MA_DATA_FILE = f"{DATA_DIR}/live_data.json"
-RSI_DATA_FILE = f"{DATA_DIR}/rsi_live_data.json"
-SESSION_DATA_FILE = f"{DATA_DIR}/session_data.json"
-TMPL_FILE = "M:/Projects/trading_losos/src/components/viewer_template.html"
 
-# Shared state
-_clients: list[queue.Queue] = []
-_lock = threading.Lock()
-_latest: dict = {}
-_template: str = ""
-_current_strategy: str = "ma"
-_current_data_file: str = MA_DATA_FILE
+PORT = 8766
+DATA_DIR = os.getenv("TRADING_DATA_DIR", "M:/Projects/trading_losos/data")
+MA_FILE = f"{DATA_DIR}/live_data.json"
+RSI_FILE = f"{DATA_DIR}/rsi_live_data.json"
+SESSION_FILE = f"{DATA_DIR}/session_data.json"
+TMPL_FILE = os.getenv("TRADING_VIEWER_TEMPLATE", "M:/Projects/trading_losos/src/components/viewer_template.html")
 
-# Track which symbols belong to which strategy
-MA_SYMBOLS = [
-    "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD",
-    "EURGBP", "EURJPY", "EURCHF", "EURAUD", "EURCAD", "EURNZD",
-    "GBPJPY", "GBPCHF", "GBPAUD", "GBPCAD", "GBPNZD",
-    "AUDJPY", "AUDCHF", "AUDCAD", "AUDNZD",
-    "CADJPY", "CADCHF", "CHFJPY", "NZDJPY", "NZDCAD",
-]
+FILES = {
+    "ma": MA_FILE,
+    "rsi": RSI_FILE,
+    "session": SESSION_FILE,
+}
 
-RSI_SYMBOLS = [
-    "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD",
-    "EURGBP", "EURJPY", "EURCHF", "EURAUD", "EURCAD", "EURNZD",
-    "GBPJPY", "GBPCHF", "GBPAUD", "GBPCAD", "GBPNZD",
-    "AUDJPY", "AUDCHF", "AUDCAD", "AUDNZD",
-    "CADJPY", "CADCHF", "CHFJPY", "NZDJPY", "NZDCAD",
-]
-
-# Session symbols (all of them - no filtering needed for session data)
-SESSION_SYMBOLS = list(set(MA_SYMBOLS + RSI_SYMBOLS))
+clients = []
+lock = threading.Lock()
+latest = {}
+template = ""
+current = "ma"
 
 
 def load_template():
-    global _template
+    global template
     with open(TMPL_FILE, "r", encoding="utf-8") as f:
-        _template = f.read()
+        template = f.read()
 
 
-def broadcast(data: dict):
-    global _latest
-    _latest = data
-    msg = ("data: " + json.dumps(data) + "\n\n").encode()
-    with _lock:
-        for q in list(_clients):
+def event_bytes(data):
+    return ("data: " + json.dumps(data) + "\n\n").encode("utf-8")
+
+
+def broadcast(data):
+    global latest
+    latest = data or {}
+    msg = event_bytes(latest)
+    with lock:
+        for q in list(clients):
             try:
                 q.put_nowait(msg)
             except queue.Full:
                 pass
 
 
-def filter_data_by_strategy(data: dict, strategy: str) -> dict:
-    """Filter the data to only show trades from the selected strategy"""
-    if data is None or "symbols" not in data:
-        return data
-    
-    # For session strategy, return data as-is (no filtering needed)
-    if strategy == "session":
-        return data
-    
-    # Determine which symbols to keep for MA/RSI
-    allowed_symbols = MA_SYMBOLS if strategy == "ma" else RSI_SYMBOLS
-    
-    # Create filtered copy
-    filtered_data = data.copy()
-    
-    # Filter symbols list
-    filtered_data["symbols"] = [s for s in data["symbols"] if s in allowed_symbols]
-    
-    # Filter profits
-    if "profits" in filtered_data:
-        filtered_data["profits"] = {k: v for k, v in data["profits"].items() if k in allowed_symbols}
-    
-    # Filter history
-    if "history" in filtered_data:
-        filtered_data["history"] = {k: v for k, v in data["history"].items() if k in allowed_symbols}
-    
-    # Filter open positions
-    if "open_positions" in filtered_data:
-        filtered_data["open_positions"] = {k: v for k, v in data["open_positions"].items() if k in allowed_symbols}
-    
-    # Filter trades
-    if "trades" in filtered_data:
-        filtered_data["trades"] = [t for t in data["trades"] if t.get("symbol") in allowed_symbols]
-    
-    return filtered_data
+def data_file():
+    return FILES.get(current, MA_FILE)
 
 
-def switch_strategy(strategy: str):
-    """Switch between MA, RSI, and Session strategies"""
-    global _current_strategy, _current_data_file, _latest
-    _current_strategy = strategy
-    
-    # CHOOSE WHICH FILE TO READ BASED ON STRATEGY
-    if strategy == "ma":
-        _current_data_file = MA_DATA_FILE
-    elif strategy == "rsi":
-        _current_data_file = RSI_DATA_FILE
-    else:  # session
-        _current_data_file = SESSION_DATA_FILE
-    
-    print(f"\n  🔄 Switched to {strategy.upper()} strategy")
-    print(f"  📁 Reading from: {_current_data_file}")
-    
-    # Force reload of latest data
-    if os.path.exists(_current_data_file):
-        try:
-            with open(_current_data_file, "r") as f:
-                raw_data = json.load(f)
-            _latest = filter_data_by_strategy(raw_data, strategy)
-            broadcast(_latest)
-        except Exception as e:
-            print(f"  Error loading {strategy} data: {e}")
+def read_payload(path, strategy):
+    if not os.path.exists(path):
+        return {
+            "timestamp": time.time(),
+            "symbols": [],
+            "profits": {},
+            "history": {},
+            "trades": [],
+            "open_positions": {},
+            "progress": 0,
+            "_strategy": strategy,
+        }
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    data["_strategy"] = strategy
+    data.setdefault("symbols", [])
+    data.setdefault("profits", {})
+    data.setdefault("history", {})
+    data.setdefault("trades", [])
+    data.setdefault("open_positions", {})
+    data.setdefault("progress", 0)
+    data.setdefault("timestamp", time.time())
+    return data
+
+
+def status():
+    return {
+        "current": current,
+        "ma_available": os.path.exists(MA_FILE),
+        "rsi_available": os.path.exists(RSI_FILE),
+        "session_available": os.path.exists(SESSION_FILE),
+    }
+
+
+def switch(strategy):
+    global current
+    if strategy not in FILES:
+        return False
+    current = strategy
+    broadcast(read_payload(data_file(), current))
+    print(f"\nSWITCH {current.upper()} {data_file()}")
+    return True
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -132,157 +105,145 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path in ("/", "/index.html"):
-            html = _template.replace("{{DATA_JSON}}", json.dumps(_latest))
-            self._ok("text/html; charset=utf-8", html.encode())
-
-        elif self.path == "/data":
-            self._ok("application/json", json.dumps(_latest).encode())
-
-        elif self.path == "/strategy":
-            info = {
-                "current": _current_strategy,
-                "ma_available": os.path.exists(MA_DATA_FILE),
-                "rsi_available": os.path.exists(RSI_DATA_FILE),
-                "session_available": os.path.exists(SESSION_DATA_FILE),
-            }
-            self._ok("application/json", json.dumps(info).encode())
-
-        elif self.path == "/events":
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "keep-alive")
-            self.send_header("X-Accel-Buffering", "no")
-            self.end_headers()
-
-            q = queue.Queue(maxsize=20)
-            with _lock:
-                _clients.append(q)
-
-            if _latest:
-                try:
-                    self.wfile.write(("data: " + json.dumps(_latest) + "\n\n").encode())
-                    self.wfile.flush()
-                except:
-                    pass
-
-            try:
-                while True:
-                    try:
-                        msg = q.get(timeout=15)
-                        self.wfile.write(msg)
-                        self.wfile.flush()
-                    except queue.Empty:
-                        self.wfile.write(b": ping\n\n")
-                        self.wfile.flush()
-            except:
-                pass
-            finally:
-                with _lock:
-                    if q in _clients:
-                        _clients.remove(q)
-
-        else:
-            self.send_response(404)
-            self.end_headers()
+            html = template.replace("{{DATA_JSON}}", json.dumps(latest))
+            self.ok("text/html; charset=utf-8", html.encode("utf-8"))
+            return
+        if self.path == "/data":
+            self.ok("application/json", json.dumps(latest).encode("utf-8"))
+            return
+        if self.path == "/strategy":
+            self.ok("application/json", json.dumps(status()).encode("utf-8"))
+            return
+        if self.path == "/events":
+            self.events()
+            return
+        self.send_response(404)
+        self.end_headers()
 
     def do_POST(self):
-        if self.path == "/switch":
-            content_length = int(self.headers.get('Content-Length', 0))
-            post_data = json.loads(self.rfile.read(content_length))
-            strategy = post_data.get('strategy', 'ma')
-            if strategy in ['ma', 'rsi', 'session']:  # <-- FIXED: Allow 'session'
-                switch_strategy(strategy)
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({"status": "ok", "strategy": strategy}).encode())
-            else:
-                self.send_response(400)
-                self.end_headers()
-        else:
+        if self.path != "/switch":
             self.send_response(404)
             self.end_headers()
+            return
+        try:
+            size = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(size) or b"{}")
+            strategy = body.get("strategy")
+        except Exception:
+            strategy = None
+        if switch(strategy):
+            self.ok("application/json", json.dumps({"ok": True, "strategy": strategy}).encode("utf-8"))
+        else:
+            self.send_response(400)
+            self.end_headers()
 
-    def _ok(self, content_type: str, body: bytes):
+    def ok(self, content_type, body):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
+    def events(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        q = queue.Queue(maxsize=30)
+        with lock:
+            clients.append(q)
+        try:
+            self.wfile.write(event_bytes(latest))
+            self.wfile.flush()
+        except Exception:
+            pass
+        try:
+            while True:
+                try:
+                    msg = q.get(timeout=15)
+                    self.wfile.write(msg)
+                    self.wfile.flush()
+                except queue.Empty:
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+        except Exception:
+            pass
+        finally:
+            with lock:
+                if q in clients:
+                    clients.remove(q)
 
-class ThreadedHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
+
+class Server(socketserver.ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
 
-def watch_file():
-    """Watch the currently selected data file and filter by strategy"""
-    last_mtime = 0.0
-    last_file = None
-    
+def watch():
+    last_path = None
+    last_mtime = 0
     while True:
         try:
-            current_file = _current_data_file
-            
-            if os.path.exists(current_file):
-                mtime = os.path.getmtime(current_file)
-                if mtime > last_mtime or current_file != last_file:
+            path = data_file()
+            if path != last_path:
+                last_path = path
+                last_mtime = 0
+            if os.path.exists(path):
+                mtime = os.path.getmtime(path)
+                if mtime > last_mtime:
                     last_mtime = mtime
-                    last_file = current_file
-                    with open(current_file, "r") as f:
-                        raw_data = json.load(f)
-                    # Apply strategy filtering
-                    filtered_data = filter_data_by_strategy(raw_data, _current_strategy)
-                    broadcast(filtered_data)
-                    
-                    total = sum(filtered_data.get("profits", {}).values()) if "profits" in filtered_data else 0
-                    ts = datetime.fromtimestamp(filtered_data["timestamp"]).strftime("%H:%M:%S")
-                    pct = filtered_data.get("progress", 0) * 100
-                    
-                    if _current_strategy == "ma":
-                        strategy_indicator = "📈 MA"
-                    elif _current_strategy == "rsi":
-                        strategy_indicator = "📉 RSI"
-                    else:
-                        strategy_indicator = "⏰ SESSION"
-                    
-                    symbols_shown = len(filtered_data.get("symbols", []))
-                    print(f"\r  [{ts}] {strategy_indicator}  TOTAL: ${total:+.2f}  |  {pct:.1f}%  |  open: {len(filtered_data.get('open_positions', {}))}  |  showing: {symbols_shown}/27", end="", flush=True)
+                    data = read_payload(path, current)
+                    broadcast(data)
+                    line(data)
         except Exception as e:
-            print(f"\n  watch error: {e}")
+            print(f"\nwatch error {e}")
         time.sleep(0.4)
 
 
+def line(data):
+    total = sum(float(v or 0) for v in data.get("profits", {}).values())
+    opened = len(data.get("open_positions", {}))
+    shown = len(data.get("symbols", []))
+    pct = float(data.get("progress", 0) or 0) * 100
+    stamp = datetime.fromtimestamp(data.get("timestamp", time.time())).strftime("%H:%M:%S")
+    print(f"\r{stamp} {current.upper()} TOTAL {total:+.2f} OPEN {opened} SYMBOLS {shown} {pct:.1f}%", end="", flush=True)
+
+
+def first_strategy():
+    for name, path in FILES.items():
+        if os.path.exists(path):
+            return name
+    return "ma"
+
+
+def start_browser(url):
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass
+
+
 def main():
+    global current
     load_template()
-    
-    # Start with whichever data file exists
-    if os.path.exists(MA_DATA_FILE):
-        switch_strategy("ma")
-    elif os.path.exists(RSI_DATA_FILE):
-        switch_strategy("rsi")
-    elif os.path.exists(SESSION_DATA_FILE):
-        switch_strategy("session")
-    
-    threading.Thread(target=watch_file, daemon=True).start()
-    
-    server = ThreadedHTTPServer(("", PORT), Handler)
+    current = first_strategy()
+    broadcast(read_payload(data_file(), current))
+    thread = threading.Thread(target=watch, daemon=True)
+    thread.start()
+    server = Server(("", PORT), Handler)
     url = f"http://localhost:{PORT}"
-    
-    print(f"\n  🚀 3D VIEWER  →  {url}")
-    print(f"  📁 MA data      →  {MA_DATA_FILE}")
-    print(f"  📁 RSI data     →  {RSI_DATA_FILE}")
-    print(f"  📁 Session data →  {SESSION_DATA_FILE}")
-    print(f"  🎮 Buttons show ONLY the selected strategy's trades\n")
-    
-    threading.Timer(1.0, webbrowser.open, args=[url]).start()
-    
+    print(f"\nVIEWER {url}")
+    print(f"MA {MA_FILE}")
+    print(f"RSI {RSI_FILE}")
+    print(f"SESSION {SESSION_FILE}")
+    threading.Timer(1, start_browser, args=[url]).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\n\n  VIEWER STOPPED")
+        pass
+    finally:
         server.server_close()
+        print("\nVIEWER STOPPED")
 
 
 if __name__ == "__main__":
