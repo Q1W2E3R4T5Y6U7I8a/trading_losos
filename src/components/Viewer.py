@@ -12,6 +12,7 @@ PORT = 8765
 DATA_DIR = "M:/Projects/trading_losos/data"
 MA_DATA_FILE = f"{DATA_DIR}/live_data.json"
 RSI_DATA_FILE = f"{DATA_DIR}/rsi_live_data.json"
+SESSION_DATA_FILE = f"{DATA_DIR}/session_data.json"
 TMPL_FILE = "M:/Projects/trading_losos/src/components/viewer_template.html"
 
 # Shared state
@@ -22,8 +23,7 @@ _template: str = ""
 _current_strategy: str = "ma"
 _current_data_file: str = MA_DATA_FILE
 
-# Track which symbols belong to which strategy (based on magic number)
-# You can manually specify or auto-detect
+# Track which symbols belong to which strategy
 MA_SYMBOLS = [
     "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD",
     "EURGBP", "EURJPY", "EURCHF", "EURAUD", "EURCAD", "EURNZD",
@@ -39,6 +39,9 @@ RSI_SYMBOLS = [
     "AUDJPY", "AUDCHF", "AUDCAD", "AUDNZD",
     "CADJPY", "CADCHF", "CHFJPY", "NZDJPY", "NZDCAD",
 ]
+
+# Session symbols (all of them - no filtering needed for session data)
+SESSION_SYMBOLS = list(set(MA_SYMBOLS + RSI_SYMBOLS))
 
 
 def load_template():
@@ -64,7 +67,11 @@ def filter_data_by_strategy(data: dict, strategy: str) -> dict:
     if data is None or "symbols" not in data:
         return data
     
-    # Determine which symbols to keep
+    # For session strategy, return data as-is (no filtering needed)
+    if strategy == "session":
+        return data
+    
+    # Determine which symbols to keep for MA/RSI
     allowed_symbols = MA_SYMBOLS if strategy == "ma" else RSI_SYMBOLS
     
     # Create filtered copy
@@ -93,10 +100,18 @@ def filter_data_by_strategy(data: dict, strategy: str) -> dict:
 
 
 def switch_strategy(strategy: str):
-    """Switch between MA and RSI strategies"""
+    """Switch between MA, RSI, and Session strategies"""
     global _current_strategy, _current_data_file, _latest
     _current_strategy = strategy
-    _current_data_file = MA_DATA_FILE if strategy == "ma" else RSI_DATA_FILE
+    
+    # CHOOSE WHICH FILE TO READ BASED ON STRATEGY
+    if strategy == "ma":
+        _current_data_file = MA_DATA_FILE
+    elif strategy == "rsi":
+        _current_data_file = RSI_DATA_FILE
+    else:  # session
+        _current_data_file = SESSION_DATA_FILE
+    
     print(f"\n  🔄 Switched to {strategy.upper()} strategy")
     print(f"  📁 Reading from: {_current_data_file}")
     
@@ -105,7 +120,6 @@ def switch_strategy(strategy: str):
         try:
             with open(_current_data_file, "r") as f:
                 raw_data = json.load(f)
-            # Filter the data to only show this strategy's symbols
             _latest = filter_data_by_strategy(raw_data, strategy)
             broadcast(_latest)
         except Exception as e:
@@ -129,6 +143,7 @@ class Handler(BaseHTTPRequestHandler):
                 "current": _current_strategy,
                 "ma_available": os.path.exists(MA_DATA_FILE),
                 "rsi_available": os.path.exists(RSI_DATA_FILE),
+                "session_available": os.path.exists(SESSION_DATA_FILE),
             }
             self._ok("application/json", json.dumps(info).encode())
 
@@ -176,7 +191,7 @@ class Handler(BaseHTTPRequestHandler):
             content_length = int(self.headers.get('Content-Length', 0))
             post_data = json.loads(self.rfile.read(content_length))
             strategy = post_data.get('strategy', 'ma')
-            if strategy in ['ma', 'rsi']:
+            if strategy in ['ma', 'rsi', 'session']:  # <-- FIXED: Allow 'session'
                 switch_strategy(strategy)
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
@@ -221,10 +236,17 @@ def watch_file():
                     filtered_data = filter_data_by_strategy(raw_data, _current_strategy)
                     broadcast(filtered_data)
                     
-                    total = sum(filtered_data.get("profits", {}).values())
+                    total = sum(filtered_data.get("profits", {}).values()) if "profits" in filtered_data else 0
                     ts = datetime.fromtimestamp(filtered_data["timestamp"]).strftime("%H:%M:%S")
                     pct = filtered_data.get("progress", 0) * 100
-                    strategy_indicator = "📈 MA" if _current_strategy == "ma" else "📉 RSI"
+                    
+                    if _current_strategy == "ma":
+                        strategy_indicator = "📈 MA"
+                    elif _current_strategy == "rsi":
+                        strategy_indicator = "📉 RSI"
+                    else:
+                        strategy_indicator = "⏰ SESSION"
+                    
                     symbols_shown = len(filtered_data.get("symbols", []))
                     print(f"\r  [{ts}] {strategy_indicator}  TOTAL: ${total:+.2f}  |  {pct:.1f}%  |  open: {len(filtered_data.get('open_positions', {}))}  |  showing: {symbols_shown}/27", end="", flush=True)
         except Exception as e:
@@ -235,10 +257,13 @@ def watch_file():
 def main():
     load_template()
     
+    # Start with whichever data file exists
     if os.path.exists(MA_DATA_FILE):
         switch_strategy("ma")
     elif os.path.exists(RSI_DATA_FILE):
         switch_strategy("rsi")
+    elif os.path.exists(SESSION_DATA_FILE):
+        switch_strategy("session")
     
     threading.Thread(target=watch_file, daemon=True).start()
     
@@ -246,8 +271,9 @@ def main():
     url = f"http://localhost:{PORT}"
     
     print(f"\n  🚀 3D VIEWER  →  {url}")
-    print(f"  📁 MA data  →  {MA_DATA_FILE}")
-    print(f"  📁 RSI data →  {RSI_DATA_FILE}")
+    print(f"  📁 MA data      →  {MA_DATA_FILE}")
+    print(f"  📁 RSI data     →  {RSI_DATA_FILE}")
+    print(f"  📁 Session data →  {SESSION_DATA_FILE}")
     print(f"  🎮 Buttons show ONLY the selected strategy's trades\n")
     
     threading.Timer(1.0, webbrowser.open, args=[url]).start()

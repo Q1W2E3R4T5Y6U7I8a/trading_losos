@@ -188,9 +188,11 @@ body { overflow: hidden; background: var(--bg); color: var(--g); font-family: 'J
 <div id="liveIndicator">⬤ connecting…</div>
 
 <!-- Strategy Selector Buttons -->
+<!-- Strategy Selector Buttons -->
 <div style="position: fixed; bottom: 50px; left: 50%; transform: translateX(-50%); z-index: 200; pointer-events: auto; background: rgba(1,1,5,0.95); backdrop-filter: blur(12px); border: 1px solid #00ff4144; border-radius: 40px; padding: 6px 12px; display: flex; gap: 8px;">
-    <button id="btnMA" style="background: #00ff4114; border: 1px solid #00ff4166; color: #00ff41; font-family: monospace; font-size: 11px; padding: 6px 16px; border-radius: 30px; cursor: pointer; transition: all 0.2s;">📈 MA CROSSOVER</button>
-    <button id="btnRSI" style="background: #00ff4114; border: 1px solid #00ff4166; color: #00ff41; font-family: monospace; font-size: 11px; padding: 6px 16px; border-radius: 30px; cursor: pointer; transition: all 0.2s;">📉 RSI REVERSION</button>
+    <button id="btnMA" style="background: #00ff4114; border: 1px solid #00ff4166; color: #00ff41; font-family: monospace; font-size: 11px; padding: 6px 16px; border-radius: 30px; cursor: pointer;">📈 MA CROSSOVER</button>
+    <button id="btnRSI" style="background: #00ff4114; border: 1px solid #00ff4166; color: #00ff41; font-family: monospace; font-size: 11px; padding: 6px 16px; border-radius: 30px; cursor: pointer;">📉 RSI REVERSION</button>
+    <button id="btnSESSION" style="background: #00ff4114; border: 1px solid #00ff4166; color: #00ff41; font-family: monospace; font-size: 11px; padding: 6px 16px; border-radius: 30px; cursor: pointer;">⏰ SESSION</button>
     <div id="strategyIndicator" style="background: #00ff4122; border-radius: 30px; padding: 6px 12px; font-size: 11px; color: #00ff41; margin-left: 8px;">🟢 MA ACTIVE</div>
 </div>
 
@@ -209,19 +211,25 @@ body { overflow: hidden; background: var(--bg); color: var(--g); font-family: 'J
 // Strategy switcher logic
 const btnMA = document.getElementById('btnMA');
 const btnRSI = document.getElementById('btnRSI');
+const btnSESSION = document.getElementById('btnSESSION');
 const strategyIndicator = document.getElementById('strategyIndicator');
-
 function setActiveButton(strategy) {
+    btnMA.classList.remove('active-strategy');
+    btnRSI.classList.remove('active-strategy');
+    btnSESSION.classList.remove('active-strategy');
+    
     if (strategy === 'ma') {
         btnMA.classList.add('active-strategy');
-        btnRSI.classList.remove('active-strategy');
         strategyIndicator.innerHTML = '📈 MA ACTIVE';
         strategyIndicator.style.color = '#00ff41';
-    } else {
+    } else if (strategy === 'rsi') {
         btnRSI.classList.add('active-strategy');
-        btnMA.classList.remove('active-strategy');
         strategyIndicator.innerHTML = '📉 RSI ACTIVE';
         strategyIndicator.style.color = '#ffdd00';
+    } else {
+        btnSESSION.classList.add('active-strategy');
+        strategyIndicator.innerHTML = '⏰ SESSION ACTIVE';
+        strategyIndicator.style.color = '#ffaa00';
     }
 }
 
@@ -235,28 +243,22 @@ async function switchStrategy(strategy) {
         
         if (response.ok) {
             setActiveButton(strategy);
-            strategyIndicator.style.opacity = '0.5';
-            setTimeout(() => { strategyIndicator.style.opacity = '1'; }, 200);
-            
+            // Fetch new data
             const dataRes = await fetch('/data');
             const newData = await dataRes.json();
-            if (newData.symbols) {
+            if (newData && newData.symbols) {
                 render3D(newData);
                 updateTradeHistory(newData);
             }
         }
     } catch (e) {
         console.error('Switch failed:', e);
-        strategyIndicator.innerHTML = '⚠️ SWITCH FAILED';
-        setTimeout(() => {
-            const current = strategyIndicator.innerHTML.includes('MA') ? '📈 MA ACTIVE' : '📉 RSI ACTIVE';
-            strategyIndicator.innerHTML = current;
-        }, 1000);
     }
 }
 
 btnMA.addEventListener('click', () => switchStrategy('ma'));
 btnRSI.addEventListener('click', () => switchStrategy('rsi'));
+btnSESSION.addEventListener('click', () => switchStrategy('session'));
 
 async function getCurrentStrategy() {
     try {

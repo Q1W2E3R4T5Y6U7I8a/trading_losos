@@ -32,7 +32,7 @@ DATA_FILE = f"{DATA_DIR}/live_data.json"
 # Safety settings
 MAX_SPREAD = 50
 SLIPPAGE = 10
-MAGIC_NUMBER = 123456
+MAGIC_NUMBER = 123458
 
 
 def get_rates(symbol, count=100):
